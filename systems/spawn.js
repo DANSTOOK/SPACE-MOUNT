@@ -5,13 +5,13 @@
 
 import { Enemy } from '../entities/enemy.js?v=2';
 
-// Rampa de dificultad: el intervalo entre spawns baja con el tiempo.
-const START_INTERVAL = 2.0;
-const MIN_INTERVAL = 0.4;
-const RAMP_RATE = 0.025;
+// Rampa de dificultad: el intervalo entre spawns baja con el tiempo (más gradual).
+const START_INTERVAL = 3.5;      // empezar más lento
+const MIN_INTERVAL = 0.8;         // no llegar tan rápido al mínimo
+const RAMP_RATE = 0.008;         // escalar más lentamente
 
 // Cap de enemigos normales (rendimiento). Los jefes lo ignoran.
-const MAX_ENEMIES = 50;
+const MAX_ENEMIES = 30;           // reducido de 50 para menos caos
 
 // Oleadas de jefe cada BOSS_INTERVAL segundos.
 const BOSS_INTERVAL = 45;

@@ -16,6 +16,7 @@ import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js?v=2';
 import { Effects } from './systems/effects.js';
 import { DevConsole } from './systems/devConsole.js';
 import { MenuSystem } from './systems/menuSystem.js';
+import { AbilitySystem } from './systems/abilitySystem.js';
 import { aabb, removeWhere } from './utils/helpers.js';
 
 const canvas = document.getElementById('game');
@@ -47,7 +48,7 @@ input.endFrame = function() {
 // no recarga la página.
 let player, enemies, projectiles, enemyShots;
 let spawner, combat, xpSystem, upgrades, scenario, effects;
-let devConsole, menuSystem;
+let devConsole, menuSystem, abilitySystem;
 menuSystem = new MenuSystem();
 let state = 'menu';    // 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
@@ -66,6 +67,8 @@ function newGame() {
   upgrades = new UpgradeSystem(player, combat);
   effects = new Effects();
   devConsole = new DevConsole();
+  abilitySystem = new AbilitySystem(player);
+  abilitySystem.selectAbility(0); // habilidad inicial: Pulso de Radiación
   session.kills = 0;
   survivalTime = 0;
   state = 'playing';
@@ -138,6 +141,18 @@ function tick(dt) {
 
   // Aplicar parámetros del devConsole al juego
   devConsole.applyToGame(player, combat, spawner, enemies);
+
+  // AbilitySystem: cambiar habilidad con 1-6, triggear con click
+  for (let i = 0; i < 6; i++) {
+    if (input.consume(`Digit${i + 1}`)) {
+      abilitySystem.selectAbility(i);
+    }
+  }
+
+  const abilityTriggered = abilitySystem.update(dt, input);
+  if (abilityTriggered) {
+    abilitySystem.activate(enemies, effects);
+  }
 
   survivalTime += dt;
   scenario.update(dt);
@@ -330,6 +345,9 @@ function renderHud() {
   renderer.rect(VIEW_W - dashBarW - 10, 50, dashBarW * dashPct, 8, dashPct >= 1 ? '#00ff88' : '#ff9f1c');
   renderer.text(`DASH`, VIEW_W - dashBarW - 10, 65, dashPct >= 1 ? '#00ff88' : '#999', 10);
 
+  // Barra de habilidad (esquina superior derecha, debajo del dash)
+  abilitySystem.render(renderer, VIEW_W, VIEW_H);
+
   // Barra de HP
   const pct = player.hp / player.stats.hp;
   renderer.rect(10, 10, 150, 14, '#1c2030');
@@ -422,5 +440,6 @@ window.SM = {
   get choices() { return choices; },
   get devConsole() { return devConsole; },
   get menuSystem() { return menuSystem; },
+  get abilitySystem() { return abilitySystem; },
   get survivalTime() { return survivalTime; },
 };
