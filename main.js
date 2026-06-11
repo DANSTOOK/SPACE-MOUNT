@@ -288,6 +288,13 @@ function renderHud() {
     renderer.text(`COMBO x${comboMult}`, VIEW_W - 180, 30, '#ff00ff', 18);
   }
 
+  // Barra de recarga del Dash (esquina superior derecha)
+  const dashPct = 1 - (player.dashCooldown / player.dashMaxCooldown);
+  const dashBarW = 120;
+  renderer.rect(VIEW_W - dashBarW - 10, 50, dashBarW, 8, '#1c2030');
+  renderer.rect(VIEW_W - dashBarW - 10, 50, dashBarW * dashPct, 8, dashPct >= 1 ? '#00ff88' : '#ff9f1c');
+  renderer.text(`DASH`, VIEW_W - dashBarW - 10, 65, dashPct >= 1 ? '#00ff88' : '#999', 10);
+
   // Barra de HP
   const pct = player.hp / player.stats.hp;
   renderer.rect(10, 10, 150, 14, '#1c2030');

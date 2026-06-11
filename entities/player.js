@@ -9,7 +9,7 @@ import { clamp } from '../utils/helpers.js';
 // (la unidad clásica del género); se convierte a px/segundo abajo.
 export const BASE_STATS = {
   hp: 100,         // también es la vida MÁXIMA (this.hp es la vida actual)
-  speed: 2,
+  speed: 3.2,      // aumentado para más agilidad (de 2 a 3.2)
   damage: 10,      // reservado (las armas llevan su propio daño)
   attackSpeed: 1,  // multiplicador de cadencia
   range: 100,
@@ -53,6 +53,12 @@ export class Player {
     // como dirección de apuntado por defecto.
     this.facingX = 1;
     this.facingY = 0;
+    // Dash defensivo: movimiento rápido en línea recta, esquivo temporal
+    this.dashTimer = 0;      // tiempo restante del dash en segundos
+    this.dashCooldown = 0;   // tiempo antes de poder hacer otro dash
+    this.dashMaxDuration = 0.3;   // duración del dash en segundos
+    this.dashMaxCooldown = 1.5;   // tiempo entre dashes (barra de recarga)
+    this.dashSpeed = 8;      // velocidad durante el dash (en SPEED_SCALE units)
   }
 
   get cx() { return this.x + this.w / 2; }
@@ -60,21 +66,34 @@ export class Player {
   get isDead() { return this.hp <= 0; }
 
   update(dt, input, bounds) {
-    let dx = input.axisX;
-    let dy = input.axisY;
+    // Actualizar cooldowns
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    if (this.dashTimer > 0) this.dashTimer -= dt;
 
-    if (dx !== 0 || dy !== 0) {
-      // Normalizar la diagonal: sin esto, moverse en diagonal sería
-      // ~41% más rápido que en línea recta.
-      const len = Math.hypot(dx, dy);
-      dx /= len;
-      dy /= len;
-      this.facingX = dx;
-      this.facingY = dy;
+    // Dash defensivo: Space = esquivo rápido en la dirección actual
+    if (input.consume('Space') && this.dashCooldown <= 0) {
+      this.dashTimer = this.dashMaxDuration;
+      this.dashCooldown = this.dashMaxCooldown;
+      this.invulnTimer = this.dashMaxDuration; // iframes durante el dash
+    }
 
-      const v = this.stats.speed * SPEED_SCALE * this.envSpeedMult;
-      this.x += dx * v * dt;
-      this.y += dy * v * dt;
+    // Movimiento unidireccional: solo adelante en la dirección que mira
+    let moving = false;
+    if (input.axisX !== 0 || input.axisY !== 0) {
+      const len = Math.hypot(input.axisX, input.axisY);
+      this.facingX = input.axisX / len;
+      this.facingY = input.axisY / len;
+      moving = true;
+    }
+
+    // Aplicar velocidad: normal o dash
+    const isInDash = this.dashTimer > 0;
+    const speed = isInDash ? this.dashSpeed : this.stats.speed;
+    const v = speed * SPEED_SCALE * this.envSpeedMult;
+
+    if (moving || isInDash) {
+      this.x += this.facingX * v * dt;
+      this.y += this.facingY * v * dt;
     }
 
     // Colisión con los límites del mapa (rectángulo {x,y,w,h}): clamp.
@@ -128,11 +147,17 @@ export class Player {
       return;
     }
 
-    // Placeholder pixel-art: traje verde neón + visor cian
-    r.rect(this.x, this.y, this.w, this.h, '#39ff14');
+    // Color cambia a cian durante dash (velocidad máxima)
+    let bodyColor = '#39ff14';
+    if (this.dashTimer > 0) {
+      bodyColor = '#7df9ff'; // destello cian durante dash
+    }
+
+    // Placeholder pixel-art: traje + visor
+    r.rect(this.x, this.y, this.w, this.h, bodyColor);
     r.rect(this.x + 5, this.y + 5, this.w - 10, 8, '#7df9ff');
 
-    // Indicador de dirección (futuro apuntado del auto-ataque)
+    // Indicador de dirección: flecha adelante en la dirección que mira
     r.rect(
       this.cx - 2 + this.facingX * 18,
       this.cy - 2 + this.facingY * 18,
