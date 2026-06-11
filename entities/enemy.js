@@ -2,7 +2,7 @@
 // subclases; las variaciones de IA se ramifican en update() según el
 // comportamiento declarado en la tabla.
 
-import { Projectile } from './projectile.js';
+import { Projectile } from './projectile.js?v=2';
 
 // speed en "px por frame @60fps" (misma convención que el player).
 export const ENEMY_TYPES = {

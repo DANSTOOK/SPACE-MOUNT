@@ -8,11 +8,17 @@ import { clamp } from '../utils/helpers.js';
 // Stats base exactos de la spec. speed está en "px por frame @60fps"
 // (la unidad clásica del género); se convierte a px/segundo abajo.
 export const BASE_STATS = {
-  hp: 100,
+  hp: 100,         // también es la vida MÁXIMA (this.hp es la vida actual)
   speed: 2,
-  damage: 10,
-  attackSpeed: 1, // ataques por segundo
+  damage: 10,      // reservado (las armas llevan su propio daño)
+  attackSpeed: 1,  // multiplicador de cadencia
   range: 100,
+  regen: 0,        // vida regenerada por segundo (power-up)
+  magnet: 60,      // radio de recogida de orbes de XP en px (power-up)
+  xpMult: 1,       // multiplicador de XP ganada (power-up)
+  multishot: 0,    // proyectiles extra por disparo (power-up)
+  crit: 0,         // probabilidad de golpe crítico 0..1 (power-up)
+  critMult: 2,     // multiplicador de daño en crítico
 };
 
 const SPEED_SCALE = 60; // speed de la spec -> px/segundo (para usar dt)
@@ -67,6 +73,11 @@ export class Player {
     this.y = clamp(this.y, bounds.y, bounds.y + bounds.h - this.h);
 
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
+
+    // Regeneración pasiva (power-up): cura sin pasar de la vida máxima.
+    if (this.stats.regen > 0 && this.hp < this.stats.hp) {
+      this.hp = Math.min(this.stats.hp, this.hp + this.stats.regen * dt);
+    }
   }
 
   // Devuelve true solo si el daño se aplicó (no en i-frames): main lo

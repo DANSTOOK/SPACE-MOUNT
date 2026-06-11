@@ -48,7 +48,8 @@ export class XpSystem {
 
   update(dt) {
     const p = this.player;
-    const magnetSq = MAGNET_RADIUS ** 2;
+    // Radio de imán desde los stats del player (power-up "imán de XP").
+    const magnetSq = (p.stats.magnet || MAGNET_RADIUS) ** 2;
 
     for (const o of this.orbs) {
       const dx = p.cx - o.cx;
@@ -63,7 +64,7 @@ export class XpSystem {
 
       if (aabb(o, p)) {
         o.dead = true;
-        this.gain(o.value);
+        this.gain(o.value * (p.stats.xpMult || 1)); // power-up "XP +%"
       }
     }
 

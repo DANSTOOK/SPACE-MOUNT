@@ -3,7 +3,7 @@
 // dispara y resuelve colisiones proyectil-enemigo. No elimina nada
 // de los arrays: solo marca (dead / hp 0); main.js limpia.
 
-import { Projectile } from '../entities/projectile.js';
+import { Projectile } from '../entities/projectile.js?v=2';
 import { aabb } from '../utils/helpers.js';
 
 // Armas como datos (spec). Blaster y electric_chain se desbloquean
@@ -33,6 +33,25 @@ export const WEAPONS = {
     pierce: false,
     chain: 3, // rebota hasta 3 veces al enemigo vivo más cercano
     color: '#e8ff4f',
+  },
+  shotgun: {
+    name: 'Escopeta',
+    damage: 8,
+    fireRate: 1.1,
+    projectileSpeed: 6,
+    pierce: false,
+    count: 4,      // dispara 4 perdigones...
+    spread: 0.5,   // ...en abanico (radianes)
+    color: '#ff8a3d',
+  },
+  missile: {
+    name: 'Misil',
+    damage: 30,
+    fireRate: 0.6,
+    projectileSpeed: 4,
+    pierce: false,
+    splash: 70,    // explota en área al impactar
+    color: '#ff5a3c',
   },
 };
 
@@ -71,16 +90,38 @@ export class CombatSystem {
       const target = this.nearestEnemyInRange(enemies);
       if (!target) continue; // sin objetivo: el arma queda lista, no gasta el disparo
 
-      const dx = target.cx - this.player.cx;
-      const dy = target.cy - this.player.cy;
-      const len = Math.hypot(dx, dy) || 1;
-      projectiles.push(
-        new Projectile(this.player.cx, this.player.cy, dx / len, dy / len, w)
-      );
+      this.fire(w, target, projectiles);
 
       // attackSpeed del player multiplica la cadencia: los upgrades
-      // de la Fase 5 afectan al combate sin tocar este código.
+      // afectan al combate sin tocar este código.
       w.cooldown = 1 / (w.fireRate * this.player.stats.attackSpeed);
+    }
+  }
+
+  // Dispara un arma hacia el objetivo. Tira N proyectiles en abanico
+  // (count del arma + multishot del player) y aplica crítico por
+  // proyectil. Una sola arma, una sola fuente de verdad del disparo.
+  fire(w, target, projectiles) {
+    const st = this.player.stats;
+    const baseAng = Math.atan2(target.cy - this.player.cy, target.cx - this.player.cx);
+    const total = (w.count || 1) + (st.multishot || 0);
+    // Si hay más de un proyectil pero el arma no abre abanico, abrimos
+    // uno mínimo para que el multishot no apile balas encima.
+    const spread = total > 1 ? (w.spread || 0.28) : 0;
+
+    for (let i = 0; i < total; i++) {
+      const t = total > 1 ? i / (total - 1) - 0.5 : 0; // -0.5..0.5
+      const ang = baseAng + t * spread;
+      const p = new Projectile(
+        this.player.cx, this.player.cy,
+        Math.cos(ang), Math.sin(ang), w
+      );
+      // Crítico por proyectil
+      if (Math.random() < (st.crit || 0)) {
+        p.damage = Math.round(p.damage * (st.critMult || 2));
+        p.crit = true;
+      }
+      projectiles.push(p);
     }
   }
 
@@ -113,8 +154,16 @@ export class CombatSystem {
         e.takeDamage(p.damage);
         p.hit.add(e);
         if (effects) {
-          effects.popText(e.cx, e.cy - 6, p.damage, p.color);
-          effects.burst(p.cx, p.cy, p.color, 4); // chispas del impacto
+          // Los críticos se ven en blanco y con más chispas
+          effects.popText(e.cx, e.cy - 6, p.damage, p.crit ? '#ffffff' : p.color);
+          effects.burst(p.cx, p.cy, p.color, p.crit ? 8 : 4);
+        }
+
+        // Daño en área (misil): golpea a todos alrededor y muere.
+        if (p.splash > 0) {
+          this.explode(p, enemies, effects);
+          p.dead = true;
+          break;
         }
 
         if (p.pierce) continue;
@@ -139,6 +188,23 @@ export class CombatSystem {
         break;
       }
     }
+  }
+
+  // Explosión en área: daña a todos los enemigos dentro del radio de
+  // splash que aún no recibieron el impacto directo.
+  explode(p, enemies, effects) {
+    const rSq = p.splash ** 2;
+    for (const e of enemies) {
+      if (e.isDead || p.hit.has(e)) continue;
+      const dx = e.cx - p.cx;
+      const dy = e.cy - p.cy;
+      if (dx * dx + dy * dy <= rSq) {
+        e.takeDamage(p.damage);
+        p.hit.add(e);
+        if (effects) effects.popText(e.cx, e.cy - 6, p.damage, p.color);
+      }
+    }
+    if (effects) effects.burst(p.cx, p.cy, p.color, 16); // estallido grande
   }
 
   nearestChainTarget(p, enemies, from) {

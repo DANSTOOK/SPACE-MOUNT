@@ -8,8 +8,8 @@ import { Input } from './engine/input.js?v=2';
 import { Player } from './entities/player.js?v=2';
 import { SpawnSystem } from './systems/spawn.js';
 import { CombatSystem } from './systems/combat.js?v=2';
-import { XpSystem } from './systems/xpSystem.js';
-import { UpgradeSystem } from './systems/upgrades.js';
+import { XpSystem } from './systems/xpSystem.js?v=2';
+import { UpgradeSystem } from './systems/upgrades.js?v=2';
 import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js';
 import { Effects } from './systems/effects.js';
 import { aabb, removeWhere } from './utils/helpers.js';
@@ -199,7 +199,7 @@ function renderHud() {
   const pct = player.hp / player.stats.hp;
   renderer.rect(10, 10, 150, 14, '#1c2030');
   renderer.rect(10, 10, 150 * pct, 14, pct > 0.3 ? '#39ff14' : '#ff4f30');
-  renderer.text(`HP ${player.hp}/${player.stats.hp}`, 14, 21, '#05050a', 11);
+  renderer.text(`HP ${Math.ceil(player.hp)}/${player.stats.hp}`, 14, 21, '#05050a', 11);
   renderer.text(`Nv ${xpSystem.level}`, 170, 21, '#ffe44f', 12);
 
   // Tiempo de supervivencia (el "score" natural del género)

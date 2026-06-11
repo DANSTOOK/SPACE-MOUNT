@@ -19,6 +19,8 @@ export class Projectile {
     this.pierce = weapon.pierce;
     this.color = weapon.color;
     this.dead = false;
+    this.splash = weapon.splash || 0; // radio de daño en área al impactar
+    this.crit = false;                // combat lo marca si el disparo fue crítico
     // Rebotes restantes (electric chain) y enemigos ya golpeados
     // (para no rebotar en círculos sobre el mismo objetivo).
     this.chainLeft = weapon.chain || 0;

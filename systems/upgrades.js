@@ -2,7 +2,7 @@
 // lógica de "ofrecer 3, aplicar 1". Las mejoras son datos + closure
 // apply(); añadir una nueva es agregar una entrada al pool.
 
-import { WEAPONS } from './combat.js';
+import { WEAPONS } from './combat.js?v=2';
 
 export class UpgradeSystem {
   constructor(player, combat) {
@@ -42,6 +42,59 @@ export class UpgradeSystem {
           w.damage = Math.round(w.damage * 1.25);
           w.fireRate *= 1.1;
         },
+      },
+      {
+        id: 'attack_speed',
+        title: 'Cadencia rápida',
+        lines: ['+15% cadencia de', 'todas las armas'],
+        apply: () => { this.player.stats.attackSpeed *= 1.15; },
+      },
+      {
+        id: 'max_hp',
+        title: 'Vida máxima +25',
+        lines: ['+25 de vida máxima', 'y te cura 25'],
+        apply: () => {
+          this.player.stats.hp += 25;
+          this.player.hp = Math.min(this.player.stats.hp, this.player.hp + 25);
+        },
+      },
+      {
+        id: 'regen',
+        title: 'Regeneración',
+        lines: ['+1 de vida por', 'segundo'],
+        apply: () => { this.player.stats.regen += 1; },
+      },
+      {
+        id: 'magnet',
+        title: 'Imán de XP',
+        lines: ['+40% de radio de', 'recogida de orbes'],
+        apply: () => { this.player.stats.magnet *= 1.4; },
+      },
+      {
+        id: 'range_up',
+        title: 'Más alcance',
+        lines: ['+20% de alcance', 'de las armas'],
+        apply: () => { this.player.stats.range *= 1.2; },
+      },
+      {
+        id: 'multishot',
+        title: 'Proyectil extra',
+        lines: ['+1 proyectil en', 'cada disparo'],
+        apply: () => { this.player.stats.multishot += 1; },
+      },
+      {
+        id: 'crit',
+        title: 'Golpe crítico',
+        lines: ['+10% de prob. de', 'crítico (x2 daño)'],
+        apply: () => {
+          this.player.stats.crit = Math.min(0.6, this.player.stats.crit + 0.1);
+        },
+      },
+      {
+        id: 'xp_up',
+        title: 'XP acelerada',
+        lines: ['+20% de XP', 'por orbe'],
+        apply: () => { this.player.stats.xpMult *= 1.2; },
       },
     ];
 
