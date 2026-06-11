@@ -170,6 +170,8 @@ export class Enemy {
     this.dashX = 0;
     this.dashY = 0;
     this.chargeCd = 1 + Math.random() * 2;
+    // Boss Elite (fases): fase 1 = ráfagas, fase 2 (a 50% HP) = spin attack
+    this.phase = 1;
   }
 
   get cx() { return this.x + this.w / 2; }
@@ -248,10 +250,23 @@ export class Enemy {
     }
 
     if (this.behavior === 'boss_elite') {
-      // Jefe patrón: persigue al player pero cada 3s hace un estallido de
-      // 8 proyectiles en cruz. La telegrafía se ve con parpadeo amarillo.
-      this.x += nx * this.speed * dt;
-      this.y += ny * this.speed * dt;
+      // Cambiar a fase 2 a 50% HP: spin attack (gira y persigue)
+      if (this.hp <= this.maxHp / 2 && this.phase === 1) {
+        this.phase = 2;
+        this.spinAngle = 0;
+      }
+
+      if (this.phase === 2) {
+        // Fase 2: gira mientras persigue (spin attack)
+        this.spinAngle = (this.spinAngle || 0) + 6 * dt; // 6 rad/s = ~1 vuelta por s
+        // Persigue pero girada (visual de spin)
+        this.x += nx * this.speed * 0.8 * dt;
+        this.y += ny * this.speed * 0.8 * dt;
+      } else {
+        // Fase 1: persigue normalito
+        this.x += nx * this.speed * dt;
+        this.y += ny * this.speed * dt;
+      }
 
       // El contador de ráfaga lo maneja main.js (necesita acceso a shots).
       return;
@@ -264,10 +279,27 @@ export class Enemy {
 
   render(r) {
     // Color del cuerpo: blanco al recibir impacto; parpadeo de aviso
-    // mientras el charger telegrafía la embestida.
+    // mientras el charger telegrafía o boss_elite en fase 2 (spin).
     let color = this.color;
     if (this.hitFlash > 0) color = '#ffffff';
     else if (this.windT > 0 && Math.floor(this.windT * 16) % 2 === 0) color = '#fff2a8';
+    else if (this.phase === 2 && Math.floor((this.spinAngle || 0) / 1.5) % 3 !== 0) color = '#fff2a8'; // amarillo parpadeante en spin
+
+    // Boss fase 2 = rotación visual (solo dibujo, no físicas)
+    if (this.phase === 2) {
+      // Dibujar 4 líneas rotando desde el centro
+      const cx = this.x + this.w / 2;
+      const cy = this.y + this.h / 2;
+      for (let i = 0; i < 4; i++) {
+        const a = (this.spinAngle || 0) + (i * Math.PI / 2);
+        const r2 = this.w / 2 + 4;
+        const x1 = cx + Math.cos(a) * r2;
+        const y1 = cy + Math.sin(a) * r2;
+        // Dibujar puntito en la punta de la línea
+        r.rect(x1 - 2, y1 - 2, 4, 4, '#fff2a8');
+      }
+    }
+
     r.rect(this.x, this.y, this.w, this.h, color);
     // "Ojos" oscuros: distinguen al enemigo de un simple rectángulo
     r.rect(this.x + 4, this.y + 5, 3, 3, '#0a0a12');

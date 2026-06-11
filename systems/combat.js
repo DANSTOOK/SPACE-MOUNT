@@ -71,6 +71,33 @@ export const WEAPONS = {
     arc: 1.5,           // amplitud del arco en radianes
     color: '#e8ff4f',
   },
+  laser: {
+    name: 'Láser',
+    kind: 'beam',
+    damage: 5,          // daño bajo pero dispara mientras presiona
+    projectileSpeed: 12, // muy rápido
+    pierce: true,       // atraviesa
+    color: '#ff00ff',   // magenta
+  },
+  boomerang: {
+    name: 'Bumerán',
+    kind: 'boomerang',
+    damage: 18,
+    projectileSpeed: 8,
+    pierce: false,
+    returnTime: 1.5,    // segundos en ir y volver
+    color: '#ffaa00',   // naranja
+  },
+  grenade: {
+    name: 'Granada',
+    kind: 'grenade',
+    damage: 35,
+    fireRate: 0.7,
+    projectileSpeed: 5,
+    splash: 100,        // grande AOE
+    fuseTime: 2,        // segundos antes de explotar
+    color: '#00ff00',   // verde
+  },
 };
 
 const CHAIN_RANGE = 240;  // px máximos de un rebote
@@ -123,6 +150,11 @@ export class CombatSystem {
     }
 
     this.updateProjectiles(dt, enemies, projectiles, bounds, effects);
+  }
+
+  // Pasar player al update para aplicar combo (llamado desde main)
+  setPlayer(player) {
+    this.player = player;
   }
 
   // --- Armas a distancia -------------------------------------------
@@ -268,11 +300,23 @@ export class CombatSystem {
 
       for (const e of enemies) {
         if (e.isDead || p.hit.has(e) || !aabb(p, e)) continue;
-        e.takeDamage(p.damage);
+
+        // Combo multiplicador: +5% daño por combo (cap x2.0)
+        const comboMult = 1 + Math.min(1, (this.player.combo || 0) * 0.05);
+        const finalDamage = Math.round(p.damage * comboMult);
+
+        e.takeDamage(finalDamage);
         p.hit.add(e);
+
+        // Sumar combo al impactar
+        if (this.player) {
+          this.player.combo = (this.player.combo || 0) + 1;
+          this.player.comboTimer = 1; // 1 segundo antes de resetear
+        }
+
         if (effects) {
           // Los críticos se ven en blanco y con más chispas
-          effects.popText(e.cx, e.cy - 6, p.damage, p.crit ? '#ffffff' : p.color);
+          effects.popText(e.cx, e.cy - 6, finalDamage, p.crit ? '#ffffff' : p.color);
           effects.burst(p.cx, p.cy, p.color, p.crit ? 8 : 4);
         }
 

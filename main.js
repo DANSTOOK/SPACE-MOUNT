@@ -155,8 +155,23 @@ function tick(dt) {
   // entero), para no arrastrar balas perdidas por todo el escenario.
   combat.update(dt, enemies, projectiles, view, effects);
 
+  // Actualizar projectiles especiales (boomerang vuelve, grenade explota)
+  for (const p of projectiles) {
+    if (p.kind === 'boomerang' || p.kind === 'grenade') {
+      p.update(dt, view, player.cx, player.cy);
+    }
+  }
+
+  // Combo meter: sumar al impactar, resetear en inactividad
+  // (se actualiza al fin del loop cuando impactos se registran)
+
   // Rocas bloquean proyectiles del jugador
   removeWhere(projectiles, (p) => scenario.blocksProjectile(p));
+
+  // Granada explota en timer (no al salir de pantalla)
+  for (const p of projectiles.filter(pr => pr.kind === 'grenade' && pr.dead)) {
+    if (effects) combat.explode(p, enemies, effects);
+  }
 
   // Proyectiles enemigos (drones) contra el player
   for (const s of enemyShots) {
@@ -266,6 +281,12 @@ function renderHud() {
   const xpPct = xpSystem.xp / xpSystem.xpToNext;
   renderer.rect(0, 0, VIEW_W, 4, '#1c2030');
   renderer.rect(0, 0, VIEW_W * xpPct, 4, '#ffe44f');
+
+  // Combo meter: si hay combo, mostrar en grande en la esquina superior derecha
+  if (player.combo > 0) {
+    const comboMult = (1 + Math.min(1, player.combo * 0.05)).toFixed(2);
+    renderer.text(`COMBO x${comboMult}`, VIEW_W - 180, 30, '#ff00ff', 18);
+  }
 
   // Barra de HP
   const pct = player.hp / player.stats.hp;

@@ -43,6 +43,9 @@ export class Player {
     // regeneran con el tiempo hasta stats.shieldMax.
     this.shield = 0;
     this.shieldTimer = SHIELD_REGEN;
+    // Combo meter: cada golpe suma combo, multiplica daño hasta x2.0
+    this.combo = 0;
+    this.comboTimer = 0;
     // Multiplicador ambiental (bioma): baja gravedad, tormentas...
     // Lo fija main.js cada frame desde el ScenarioSystem.
     this.envSpeedMult = 1;
@@ -79,6 +82,13 @@ export class Player {
     this.y = clamp(this.y, bounds.y, bounds.y + bounds.h - this.h);
 
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
+
+    // Combo meter: cada golpe suma combo (+5% daño), se resetea si pasan 1s sin golpear
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt;
+    } else if (this.combo > 0) {
+      this.combo = 0; // resetear
+    }
 
     // Regeneración pasiva (power-up): cura sin pasar de la vida máxima.
     if (this.stats.regen > 0 && this.hp < this.stats.hp) {
