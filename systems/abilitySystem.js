@@ -178,19 +178,11 @@ export class AbilitySystem {
   update(dt, input) {
     if (this.cooldown > 0) this.cooldown -= dt;
 
-    // Click izquierdo para activar
-    if (input.mouseClick && !input.mouseClickConsumed) {
-      input.mouseClickConsumed = true;
-      return true; // señalar que se triggeó
-    }
-
     // Actualizar áreas persistentes
     for (const area of this.activeAreas) {
       area.duration -= dt;
     }
     this.activeAreas = this.activeAreas.filter(a => a.duration > 0);
-
-    return false;
   }
 
   render(r, VIEW_W, VIEW_H) {

@@ -50,7 +50,7 @@ let player, enemies, projectiles, enemyShots;
 let spawner, combat, xpSystem, upgrades, scenario, effects;
 let devConsole, menuSystem, abilitySystem;
 menuSystem = new MenuSystem();
-let state = 'menu';    // 'menu' | 'playing' | 'levelup'
+let state = 'main_menu';    // 'main_menu' | 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
 let survivalTime;
 let selectedBiome = 'mars'; // bioma seleccionado en el menú
@@ -114,6 +114,20 @@ function update(dt) {
 function tick(dt) {
   elapsed += dt;
 
+  if (state === 'main_menu') {
+    const result = menuSystem.update(input, mouseX, mouseY);
+    if (result === 'QUIT') {
+      // Salir (no hacemos nada, solo queda en el menú)
+      return;
+    } else if (result && result !== 'QUIT') {
+      // Resultado es un bioma key, cambiar a estado menu
+      selectedBiome = result;
+      newGame();
+      return;
+    }
+    return;
+  }
+
   if (state === 'menu') {
     updateMenu();
     return;
@@ -149,10 +163,14 @@ function tick(dt) {
     }
   }
 
-  const abilityTriggered = abilitySystem.update(dt, input);
-  if (abilityTriggered) {
+  // Detectar click izquierdo para abilities
+  if (input.mouseClick && !input.mouseClickConsumed) {
+    input.mouseClickConsumed = true;
     abilitySystem.activate(enemies, effects);
   }
+
+  // Update cooldowns
+  abilitySystem.update(dt, input);
 
   survivalTime += dt;
   scenario.update(dt);
@@ -282,11 +300,7 @@ function tick(dt) {
 }
 
 function updateMenu() {
-  const selected = menuSystem.update(input, mouseX, mouseY);
-  if (selected) {
-    selectedBiome = selected;
-    newGame();
-  }
+  // Este función ya no se usa, el menú se maneja en main_menu state
 }
 
 function updateLevelUpMenu() {
@@ -324,6 +338,12 @@ function updateLevelUpMenu() {
 }
 
 function render() {
+  if (state === 'main_menu') {
+    renderer.clear('#0a0a12');
+    menuSystem.render(renderer, VIEW_W, VIEW_H);
+    return;
+  }
+
   if (state === 'menu') {
     renderMenu();
     return;
