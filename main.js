@@ -4,7 +4,7 @@
 
 import { Renderer, VIEW_W, VIEW_H } from './engine/renderer.js';
 import { GameLoop } from './engine/gameLoop.js';
-import { Input } from './engine/input.js';
+import { Input } from './engine/input.js?v=2';
 import { Player } from './entities/player.js';
 import { SpawnSystem } from './systems/spawn.js';
 import { CombatSystem } from './systems/combat.js';
@@ -59,7 +59,15 @@ const stars = Array.from({ length: 120 }, () => ({
 
 let elapsed = 0;
 
+// La función que ve el GameLoop: corre la lógica del frame y SIEMPRE
+// limpia los flancos de input al final, sin importar por qué rama de
+// tick() se salió.
 function update(dt) {
+  tick(dt);
+  input.endFrame();
+}
+
+function tick(dt) {
   elapsed += dt;
 
   if (state === 'menu') {

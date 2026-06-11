@@ -21,7 +21,9 @@ export class Input {
 
     target.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
-      this.pressed.delete(e.code); // un flanco no consumido caduca al soltar
+      // NO borramos el flanco aquí: si un tap entero (keydown+keyup)
+      // cae dentro de un mismo frame, update() debe poder verlo. Los
+      // flancos se limpian en endFrame(), tras el update.
     });
 
     // Si la ventana pierde foco, soltamos todo: evita teclas "pegadas"
@@ -40,6 +42,13 @@ export class Input {
     if (!this.pressed.has(code)) return false;
     this.pressed.delete(code);
     return true;
+  }
+
+  // Llamar al final de cada frame, después de todos los consume(): los
+  // flancos no consumidos caducan aquí (no en keyup), de modo que un
+  // tap completo dentro de un frame nunca se pierde.
+  endFrame() {
+    this.pressed.clear();
   }
 
   // Ejes de movimiento normalizados a -1/0/1 (WASD + flechas).
