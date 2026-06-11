@@ -6,6 +6,8 @@ import { Renderer, VIEW_W, VIEW_H } from './engine/renderer.js?v=2';
 import { GameLoop } from './engine/gameLoop.js';
 import { Input } from './engine/input.js?v=2';
 import { Player } from './entities/player.js?v=2';
+import { ENEMY_TYPES } from './entities/enemy.js?v=2';
+import { Projectile } from './entities/projectile.js?v=2';
 import { SpawnSystem } from './systems/spawn.js?v=2';
 import { CombatSystem } from './systems/combat.js?v=2';
 import { XpSystem } from './systems/xpSystem.js?v=2';
@@ -118,6 +120,35 @@ function tick(dt) {
     e.update(dt, player, enemyShots);
     // Daño por contacto: los i-frames del player regulan el ritmo
     if (aabb(player, e) && player.takeDamage(e.damage)) effects.shake(7, 0.25);
+
+    // Healer: cura a enemigos aliados en rango
+    if (e.type === 'healer' && !e.isDead) {
+      const def = ENEMY_TYPES.healer;
+      const healRangeSq = def.healRange ** 2;
+      for (const ally of enemies) {
+        if (ally === e || ally.isDead) continue;
+        const dx = ally.cx - e.cx;
+        const dy = ally.cy - e.cy;
+        if (dx * dx + dy * dy <= healRangeSq) {
+          ally.hp = Math.min(ally.maxHp, ally.hp + def.healPower * dt);
+        }
+      }
+    }
+
+    // Boss Elite: dispara ráfaga cada 3s en 8 direcciones
+    if (e.type === 'boss_elite' && !e.isDead) {
+      e.burstCd = (e.burstCd || e.burstCooldown) - dt;
+      if (e.burstCd <= 0) {
+        const def = ENEMY_TYPES.boss_elite;
+        const bulletDef = { damage: 6, projectileSpeed: 3, pierce: false, color: '#ff006e' };
+        for (let i = 0; i < def.burstCount; i++) {
+          const a = (i / def.burstCount) * Math.PI * 2;
+          enemyShots.push(new Projectile(e.cx, e.cy, Math.cos(a), Math.sin(a), bulletDef));
+        }
+        e.burstCd = def.burstCooldown;
+        if (effects) effects.burst(e.cx, e.cy, '#ff006e', 16);
+      }
+    }
   }
 
   // Proyectiles del player: mueren al salir de la VISTA (no del mundo

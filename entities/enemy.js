@@ -9,7 +9,7 @@ export const ENEMY_TYPES = {
   marciano: {
     hp: 20,
     speed: 1.2,
-    damage: 10,
+    damage: 8,     // bajado de 10 (balance)
     size: 20,
     color: '#ff3864',
     xp: 1,
@@ -20,7 +20,7 @@ export const ENEMY_TYPES = {
     // en ángulos en vez de huir en línea recta.
     hp: 10,
     speed: 2.6,
-    damage: 5,
+    damage: 3,     // bajado de 5 (balance)
     size: 14,
     color: '#b14fff',
     xp: 1,
@@ -30,7 +30,7 @@ export const ENEMY_TYPES = {
     // Mantiene distancia y dispara: castiga quedarse quieto.
     hp: 30,
     speed: 0.9,
-    damage: 8, // daño por contacto; su disparo usa DRONE_SHOT
+    damage: 6,     // bajado de 8 (balance)
     size: 18,
     color: '#4fa9ff',
     xp: 2,
@@ -91,6 +91,33 @@ export const ENEMY_TYPES = {
     color: '#2ec4b6',
     xp: 1,
     behavior: 'chase',
+  },
+  healer: {
+    // Support: cura a otros enemigos cercanos (200px). No ataca directo.
+    // Objetivo prioritario para el jugador. Aparece a los 90s.
+    hp: 25,
+    speed: 1.0,
+    damage: 0,      // no ataca por contacto
+    size: 20,
+    color: '#10f950', // neón verde medicina
+    xp: 4,
+    behavior: 'support',
+    healPower: 5,   // cura 5 hp/s a aliados
+    healRange: 200, // px de radio
+  },
+  boss_elite: {
+    // Jefe con patrón: persigue, pero cada 3s hace un estallido de
+    // proyectiles enemigos en 8 direcciones. Telegrafía visible.
+    hp: 500,
+    speed: 0.4,
+    damage: 22,
+    size: 56,
+    color: '#ff006e', // rosa intenso jefe
+    xp: 50,
+    behavior: 'boss_elite',
+    elite: true,
+    burstCooldown: 3,  // segundos entre ráfagas
+    burstCount: 8,     // proyectiles en ráfaga
   },
 };
 
@@ -207,6 +234,26 @@ export class Enemy {
           this.chargeCd = CHARGE_COOLDOWN;
         }
       }
+      return;
+    }
+
+    if (this.behavior === 'support') {
+      // Healer: se acerca lentamente al player pero no ataca. Se cura
+      // desde arriba si ve aliados en rango. Comportamiento: "orbita" sin
+      // agredir; el jugador lo matará para eliminar el soporte enemigo.
+      // (La cura a aliados la maneja main.js en el loop de enemigos.)
+      this.x += nx * this.speed * dt;
+      this.y += ny * this.speed * dt;
+      return;
+    }
+
+    if (this.behavior === 'boss_elite') {
+      // Jefe patrón: persigue al player pero cada 3s hace un estallido de
+      // 8 proyectiles en cruz. La telegrafía se ve con parpadeo amarillo.
+      this.x += nx * this.speed * dt;
+      this.y += ny * this.speed * dt;
+
+      // El contador de ráfaga lo maneja main.js (necesita acceso a shots).
       return;
     }
 

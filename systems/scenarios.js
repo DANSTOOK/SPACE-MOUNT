@@ -14,13 +14,13 @@ const BIG_H = 1800;
 export const BIOMES = {
   mars: {
     name: 'Marte',
-    enemyMultiplier: 1.2,
+    enemyMultiplier: 1.0,  // bajado de 1.2 (balance: curva de dificultad suave)
     specialEffect: 'dust_storm',
     sky: '#0a0a12',
     edge: '#ff4f30',
     world: { w: BIG_W, h: BIG_H },
     playerSpeedMult: 1,
-    lines: ['Spawn agresivo y tormentas', 'de polvo que te frenan'],
+    lines: ['Spawn moderado y tormentas', 'de polvo que te frenan'],
   },
   luna: {
     name: 'Luna',
