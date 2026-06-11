@@ -39,4 +39,16 @@ export class Renderer {
     this.ctx.font = `${size}px monospace`;
     this.ctx.fillText(str, x, y);
   }
+
+  // Sacudida de cámara: translada el origen para los dibujos que
+  // queden entre beginShake() y endShake(). Pensado para el mundo
+  // (entidades), no para el fondo ni el HUD, así no aparecen huecos.
+  beginShake(dx, dy) {
+    this.ctx.save();
+    this.ctx.translate(Math.round(dx), Math.round(dy));
+  }
+
+  endShake() {
+    this.ctx.restore();
+  }
 }

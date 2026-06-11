@@ -70,6 +70,7 @@ export class Enemy {
     // Cooldown inicial aleatorio: drones que spawnean juntos no
     // disparan en sincronía perfecta.
     this.shootTimer = 1 + Math.random();
+    this.hitFlash = 0; // segundos restantes de parpadeo blanco al ser golpeado
   }
 
   get cx() { return this.x + this.w / 2; }
@@ -78,10 +79,13 @@ export class Enemy {
 
   takeDamage(amount) {
     this.hp = Math.max(0, this.hp - amount);
+    this.hitFlash = 0.08; // breve flash blanco
   }
 
   // shots: array compartido de proyectiles enemigos (lo llena el drone)
   update(dt, player, shots) {
+    if (this.hitFlash > 0) this.hitFlash -= dt;
+
     const dx = player.cx - this.cx;
     const dy = player.cy - this.cy;
     const dist = Math.hypot(dx, dy) || 1;
@@ -112,7 +116,8 @@ export class Enemy {
   }
 
   render(r) {
-    r.rect(this.x, this.y, this.w, this.h, this.color);
+    // Flash blanco al recibir impacto: feedback de "le di"
+    r.rect(this.x, this.y, this.w, this.h, this.hitFlash > 0 ? '#ffffff' : this.color);
     // "Ojos" oscuros: distinguen al enemigo de un simple rectángulo
     r.rect(this.x + 4, this.y + 5, 3, 3, '#0a0a12');
     r.rect(this.x + this.w - 7, this.y + 5, 3, 3, '#0a0a12');

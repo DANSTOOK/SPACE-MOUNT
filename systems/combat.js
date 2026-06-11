@@ -58,9 +58,9 @@ export class CombatSystem {
     );
   }
 
-  update(dt, enemies, projectiles, bounds) {
+  update(dt, enemies, projectiles, bounds, effects = null) {
     this.updateWeapons(dt, enemies, projectiles);
-    this.updateProjectiles(dt, enemies, projectiles, bounds);
+    this.updateProjectiles(dt, enemies, projectiles, bounds, effects);
   }
 
   updateWeapons(dt, enemies, projectiles) {
@@ -103,7 +103,7 @@ export class CombatSystem {
     return best;
   }
 
-  updateProjectiles(dt, enemies, projectiles, bounds) {
+  updateProjectiles(dt, enemies, projectiles, bounds, effects) {
     for (const p of projectiles) {
       p.update(dt, bounds);
       if (p.dead) continue;
@@ -112,6 +112,10 @@ export class CombatSystem {
         if (e.isDead || p.hit.has(e) || !aabb(p, e)) continue;
         e.takeDamage(p.damage);
         p.hit.add(e);
+        if (effects) {
+          effects.popText(e.cx, e.cy - 6, p.damage, p.color);
+          effects.burst(p.cx, p.cy, p.color, 4); // chispas del impacto
+        }
 
         if (p.pierce) continue;
 

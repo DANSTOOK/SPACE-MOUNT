@@ -2,15 +2,16 @@
 // maneja la máquina de estados (menu → playing ⇄ levelup → muerte),
 // y dibuja el HUD. La lógica de gameplay vive en entities/ y systems/.
 
-import { Renderer, VIEW_W, VIEW_H } from './engine/renderer.js';
+import { Renderer, VIEW_W, VIEW_H } from './engine/renderer.js?v=2';
 import { GameLoop } from './engine/gameLoop.js';
 import { Input } from './engine/input.js?v=2';
-import { Player } from './entities/player.js';
+import { Player } from './entities/player.js?v=2';
 import { SpawnSystem } from './systems/spawn.js';
-import { CombatSystem } from './systems/combat.js';
+import { CombatSystem } from './systems/combat.js?v=2';
 import { XpSystem } from './systems/xpSystem.js';
 import { UpgradeSystem } from './systems/upgrades.js';
 import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js';
+import { Effects } from './systems/effects.js';
 import { aabb, removeWhere } from './utils/helpers.js';
 
 const canvas = document.getElementById('game');
@@ -22,7 +23,7 @@ const session = { kills: 0 };
 // Todo el estado de partida se recrea en newGame(): reiniciar con R
 // no recarga la página.
 let player, enemies, projectiles, enemyShots;
-let spawner, combat, xpSystem, upgrades, scenario;
+let spawner, combat, xpSystem, upgrades, scenario, effects;
 let state = 'menu';    // 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
 let survivalTime;
@@ -38,6 +39,7 @@ function newGame() {
   combat = new CombatSystem(player);
   xpSystem = new XpSystem(player);
   upgrades = new UpgradeSystem(player, combat);
+  effects = new Effects();
   session.kills = 0;
   survivalTime = 0;
   state = 'playing';
@@ -99,10 +101,10 @@ function tick(dt) {
   for (const e of enemies) {
     e.update(dt, player, enemyShots);
     // Daño por contacto: los i-frames del player regulan el ritmo
-    if (aabb(player, e)) player.takeDamage(e.damage);
+    if (aabb(player, e) && player.takeDamage(e.damage)) effects.shake(7, 0.25);
   }
 
-  combat.update(dt, enemies, projectiles, scenario.bounds);
+  combat.update(dt, enemies, projectiles, scenario.bounds, effects);
 
   // Rocas bloquean proyectiles del jugador
   removeWhere(projectiles, (p) => scenario.blocksProjectile(p));
@@ -111,20 +113,24 @@ function tick(dt) {
   for (const s of enemyShots) {
     s.update(dt, scenario.bounds);
     if (!s.dead && aabb(player, s)) {
-      player.takeDamage(s.damage);
+      if (player.takeDamage(s.damage)) effects.shake(7, 0.25);
       s.dead = true;
     }
   }
 
-  // Los muertos sueltan su orbe ANTES de la limpieza in-place
+  // Los muertos sueltan su orbe y estallan ANTES de la limpieza in-place
   for (const e of enemies) {
-    if (e.isDead) xpSystem.spawnOrb(e.cx, e.cy, e.xpValue);
+    if (e.isDead) {
+      xpSystem.spawnOrb(e.cx, e.cy, e.xpValue);
+      effects.burst(e.cx, e.cy, e.color, 10);
+    }
   }
   session.kills += removeWhere(enemies, (e) => e.isDead);
   removeWhere(projectiles, (p) => p.dead);
   removeWhere(enemyShots, (s) => s.dead);
 
   xpSystem.update(dt);
+  effects.update(dt);
 
   // ¿Subió de nivel? Abrir menú de mejora (uno por nivel encolado)
   if (xpSystem.pendingLevels > 0) {
@@ -165,11 +171,16 @@ function render() {
 
   scenario.renderBackground(renderer, elapsed, stars);
 
+  // El mundo (entidades + efectos) se sacude; fondo y HUD no, para que
+  // no aparezcan huecos en los bordes ni tiemble el texto.
+  renderer.beginShake(effects.offsetX, effects.offsetY);
   if (xpSystem) xpSystem.render(renderer); // orbes debajo de todo lo vivo
   for (const e of enemies) e.render(renderer);
   for (const p of projectiles) p.render(renderer);
   for (const s of enemyShots) s.render(renderer);
   player.render(renderer);
+  effects.render(renderer); // partículas y números de daño sobre el mundo
+  renderer.endShake();
 
   scenario.renderForeground(renderer);
 
@@ -276,6 +287,7 @@ window.SM = {
   get projectiles() { return projectiles; },
   get enemyShots() { return enemyShots; },
   get spawner() { return spawner; },
+  get effects() { return effects; },
   get combat() { return combat; },
   get xpSystem() { return xpSystem; },
   get upgrades() { return upgrades; },

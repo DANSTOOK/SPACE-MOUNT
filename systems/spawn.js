@@ -2,7 +2,7 @@
 // colisiones ni combate; solo produce instancias de Enemy según el
 // ritmo del bioma activo.
 
-import { Enemy } from '../entities/enemy.js';
+import { Enemy } from '../entities/enemy.js?v=2';
 
 // Rampa de dificultad: el intervalo entre spawns baja con el tiempo
 // de partida. Con enemyMultiplier 1.2 (Marte), todo va un 20% más rápido.

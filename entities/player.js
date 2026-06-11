@@ -69,10 +69,13 @@ export class Player {
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
   }
 
+  // Devuelve true solo si el daño se aplicó (no en i-frames): main lo
+  // usa para disparar el screen shake únicamente en golpes reales.
   takeDamage(amount) {
-    if (this.invulnTimer > 0 || this.isDead) return;
+    if (this.invulnTimer > 0 || this.isDead) return false;
     this.hp = Math.max(0, this.hp - amount);
     this.invulnTimer = INVULN_TIME;
+    return true;
   }
 
   render(r) {
