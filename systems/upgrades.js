@@ -105,6 +105,24 @@ export class UpgradeSystem {
         lines: ['+20% de XP', 'por orbe'],
         apply: () => { this.player.stats.xpMult *= 1.2; },
       },
+      {
+        id: 'dash_speed',
+        title: 'Dash Turbocargado',
+        lines: ['+30% velocidad', 'durante el dash'],
+        apply: () => { this.player.dashSpeed *= 1.3; },
+      },
+      {
+        id: 'dash_cooldown',
+        title: 'Dash Frecuente',
+        lines: ['-25% de tiempo de', 'recarga del dash'],
+        apply: () => { this.player.dashMaxCooldown *= 0.75; },
+      },
+      {
+        id: 'dash_duration',
+        title: 'Dash Prolongado',
+        lines: ['+40% duración del', 'dash defensivo'],
+        apply: () => { this.player.dashMaxDuration *= 1.4; },
+      },
     ];
 
     const free = this.combat.unequippedKeys;

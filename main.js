@@ -15,19 +15,40 @@ import { UpgradeSystem } from './systems/upgrades.js?v=2';
 import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js?v=2';
 import { Effects } from './systems/effects.js';
 import { DevConsole } from './systems/devConsole.js';
+import { MenuSystem } from './systems/menuSystem.js';
 import { aabb, removeWhere } from './utils/helpers.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
 const input = new Input();
+const menuSystem = new MenuSystem();
 
 const session = { kills: 0 };
+
+// Tracking de mouse para el menú
+let mouseX = 0, mouseY = 0;
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+  mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+});
+
+canvas.addEventListener('click', () => {
+  input.mouseClick = true;
+});
+
+// Limpiar flag de click al final del frame
+const originalEndFrame = input.endFrame.bind(input);
+input.endFrame = function() {
+  originalEndFrame();
+  this.mouseClick = false;
+};
 
 // Todo el estado de partida se recrea en newGame(): reiniciar con R
 // no recarga la página.
 let player, enemies, projectiles, enemyShots;
 let spawner, combat, xpSystem, upgrades, scenario, effects;
-let devConsole;
+let devConsole, menuSystem;
 let state = 'menu';    // 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
 let survivalTime;
@@ -238,13 +259,10 @@ function tick(dt) {
 }
 
 function updateMenu() {
-  const biomeKeys = ['mars', 'luna', 'asteroids', 'station'];
-  for (let i = 0; i < 4; i++) {
-    if (input.consume(`Digit${i + 1}`)) {
-      selectedBiome = biomeKeys[i];
-      newGame();
-      return;
-    }
+  const selected = menuSystem.update(input, mouseX, mouseY);
+  if (selected) {
+    selectedBiome = selected;
+    newGame();
   }
 }
 
@@ -348,21 +366,9 @@ function renderHud() {
 
 function renderMenu() {
   try {
-    renderer.rect(0, 0, 960, 540, 'rgba(5, 5, 10, 0.88)');
-    renderer.text('SPACE MOUNT', 350, 80, '#39ff14', 28);
-    renderer.text('Elige tu bioma (1-4)', 350, 130, '#ffe44f', 18);
-
-    renderer.rect(20, 200, 920, 50, '#141a2e');
-    renderer.rect(20, 260, 920, 50, '#141a2e');
-    renderer.rect(20, 320, 920, 50, '#141a2e');
-    renderer.rect(20, 380, 920, 50, '#141a2e');
-
-    renderer.text('1 - Marte (spawn agresivo)', 40, 220, '#ffe44f', 16);
-    renderer.text('2 - Luna (baja gravedad)', 40, 280, '#ffe44f', 16);
-    renderer.text('3 - Asteroides (rocas)', 40, 340, '#ffe44f', 16);
-    renderer.text('4 - Estacion (arena cerrada)', 40, 400, '#ffe44f', 16);
+    menuSystem.render(renderer, VIEW_W, VIEW_H);
   } catch (e) {
-    renderer.text('ERROR EN MENU', 100, 100, '#ff0000', 16);
+    renderer.text('ERROR EN MENU: ' + e.message, 100, 100, '#ff0000', 12);
   }
 }
 
