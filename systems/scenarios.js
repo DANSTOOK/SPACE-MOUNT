@@ -56,8 +56,8 @@ export const BIOMES = {
 
 export const BIOME_KEYS = Object.keys(BIOMES);
 
-const STORM_CALM = 15;
-const STORM_DURATION = 5;
+const STORM_CALM = 30;
+const STORM_DURATION = 2;
 const STORM_SLOW = 0.8;
 const STAR_DENSITY = 1 / 9000; // estrellas por px² de mundo
 const ROCK_DENSITY = 1 / 90000; // rocas por px² (bioma asteroides)
@@ -195,7 +195,7 @@ export class ScenarioSystem {
 
   renderForeground(r) {
     if (this.storming) {
-      r.rect(0, 0, VIEW_W, VIEW_H, 'rgba(255, 99, 48, 0.18)');
+      r.rect(0, 0, VIEW_W, VIEW_H, 'rgba(255, 99, 48, 0.08)');
     }
   }
 }
