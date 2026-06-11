@@ -19,10 +19,12 @@ export const BASE_STATS = {
   multishot: 0,    // proyectiles extra por disparo (power-up)
   crit: 0,         // probabilidad de golpe crítico 0..1 (power-up)
   critMult: 2,     // multiplicador de daño en crítico
+  shieldMax: 0,    // cargas de escudo máximas (power-up)
 };
 
 const SPEED_SCALE = 60; // speed de la spec -> px/segundo (para usar dt)
 const INVULN_TIME = 0.5; // i-frames tras recibir daño (estándar del género)
+const SHIELD_REGEN = 6;  // segundos para recuperar 1 carga de escudo
 
 export class Player {
   constructor(cx, cy) {
@@ -37,6 +39,10 @@ export class Player {
     this.hp = this.stats.hp;
 
     this.invulnTimer = 0;
+    // Escudo: cargas actuales que absorben golpes (power-up). Se
+    // regeneran con el tiempo hasta stats.shieldMax.
+    this.shield = 0;
+    this.shieldTimer = SHIELD_REGEN;
     // Multiplicador ambiental (bioma): baja gravedad, tormentas...
     // Lo fija main.js cada frame desde el ScenarioSystem.
     this.envSpeedMult = 1;
@@ -78,14 +84,31 @@ export class Player {
     if (this.stats.regen > 0 && this.hp < this.stats.hp) {
       this.hp = Math.min(this.stats.hp, this.hp + this.stats.regen * dt);
     }
+
+    // Recarga de escudo (power-up): +1 carga cada SHIELD_REGEN s.
+    if (this.stats.shieldMax > 0 && this.shield < this.stats.shieldMax) {
+      this.shieldTimer -= dt;
+      if (this.shieldTimer <= 0) {
+        this.shield++;
+        this.shieldTimer = SHIELD_REGEN;
+      }
+    }
   }
 
-  // Devuelve true solo si el daño se aplicó (no en i-frames): main lo
-  // usa para disparar el screen shake únicamente en golpes reales.
+  // Devuelve true si hubo impacto (para el screen shake). Si hay escudo,
+  // consume una carga y NO pierde vida. Devuelve false si estaba en
+  // i-frames o ya muerto.
   takeDamage(amount) {
     if (this.invulnTimer > 0 || this.isDead) return false;
-    this.hp = Math.max(0, this.hp - amount);
     this.invulnTimer = INVULN_TIME;
+
+    if (this.shield > 0) {
+      this.shield--;                 // el escudo absorbe el golpe
+      this.shieldTimer = SHIELD_REGEN; // y reinicia su recarga
+      return true;
+    }
+
+    this.hp = Math.max(0, this.hp - amount);
     return true;
   }
 
@@ -105,5 +128,19 @@ export class Player {
       this.cy - 2 + this.facingY * 18,
       4, 4, '#ff4f30'
     );
+
+    // Aura de escudo: marco cian alrededor del player por cada carga
+    // (capas concéntricas = cuántas cargas tiene).
+    for (let i = 0; i < this.shield; i++) {
+      const pad = 4 + i * 3;
+      const x = this.x - pad;
+      const y = this.y - pad;
+      const w = this.w + pad * 2;
+      const h = this.h + pad * 2;
+      r.rect(x, y, w, 2, '#7df9ff');
+      r.rect(x, y + h - 2, w, 2, '#7df9ff');
+      r.rect(x, y, 2, h, '#7df9ff');
+      r.rect(x + w - 2, y, 2, h, '#7df9ff');
+    }
   }
 }

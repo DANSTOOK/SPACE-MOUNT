@@ -188,6 +188,7 @@ function render() {
   for (const p of projectiles) p.render(renderer);
   for (const s of enemyShots) s.render(renderer);
   player.render(renderer);
+  combat.render(renderer); // cuchillas orbitales y barridos de melee
   effects.render(renderer); // partículas y números de daño sobre el mundo
   renderer.endShake();
 
@@ -210,6 +211,9 @@ function renderHud() {
   renderer.rect(10, 10, 150 * pct, 14, pct > 0.3 ? '#39ff14' : '#ff4f30');
   renderer.text(`HP ${Math.ceil(player.hp)}/${player.stats.hp}`, 14, 21, '#05050a', 11);
   renderer.text(`Nv ${xpSystem.level}`, 170, 21, '#ffe44f', 12);
+  if (player.stats.shieldMax > 0) {
+    renderer.text(`Escudo ${player.shield}/${player.stats.shieldMax}`, 214, 21, '#7df9ff', 12);
+  }
 
   // Tiempo de supervivencia (el "score" natural del género)
   const mm = String(Math.floor(survivalTime / 60)).padStart(2, '0');

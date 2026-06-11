@@ -65,6 +65,15 @@ export class UpgradeSystem {
         apply: () => { this.player.stats.regen += 1; },
       },
       {
+        id: 'shield',
+        title: 'Escudo +1',
+        lines: ['+1 carga de escudo', 'que absorbe un golpe'],
+        apply: () => {
+          this.player.stats.shieldMax += 1;
+          this.player.shield += 1; // una carga lista de inmediato
+        },
+      },
+      {
         id: 'magnet',
         title: 'Imán de XP',
         lines: ['+40% de radio de', 'recogida de orbes'],
