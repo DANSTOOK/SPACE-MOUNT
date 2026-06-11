@@ -27,6 +27,7 @@ const session = { kills: 0 };
 
 // Tracking de mouse para el menú
 let mouseX = 0, mouseY = 0;
+let mouseClickQueue = 0; // contador de clicks sin procesar
 canvas.addEventListener('mousemove', (e) => {
   const rect = canvas.getBoundingClientRect();
   mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
@@ -34,14 +35,14 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 canvas.addEventListener('click', () => {
-  input.mouseClick = true;
+  mouseClickQueue++;
 });
 
 // Limpiar flag de click al final del frame
 const originalEndFrame = input.endFrame.bind(input);
 input.endFrame = function() {
   originalEndFrame();
-  this.mouseClick = false;
+  // mouseClickQueue se limpia después de procesar
 };
 
 // Todo el estado de partida se recrea en newGame(): reiniciar con R
@@ -163,9 +164,9 @@ function tick(dt) {
     }
   }
 
-  // Detectar click izquierdo para abilities
-  if (input.mouseClick && !input.mouseClickConsumed) {
-    input.mouseClickConsumed = true;
+  // Detectar click izquierdo para abilities (robusto: usa cola de clicks)
+  if (mouseClickQueue > 0) {
+    mouseClickQueue--;
     abilitySystem.activate(enemies, effects);
   }
 

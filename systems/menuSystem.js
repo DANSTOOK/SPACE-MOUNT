@@ -100,12 +100,12 @@ export class MenuSystem {
 
   getHoveredBiome(mouseX, mouseY) {
     const cardW = 920;
-    const cardH = 50;
+    const cardH = 40;
     const startX = 20;
-    const gap = 60;
+    const gap = 45;
 
     for (let i = 0; i < 4; i++) {
-      const y = 200 + i * (cardH + gap);
+      const y = 140 + i * (cardH + gap);
       if (mouseX >= startX && mouseX <= startX + cardW &&
           mouseY >= y && mouseY <= y + cardH) {
         return i;
@@ -160,16 +160,16 @@ export class MenuSystem {
   }
 
   renderBiomeSelect(r, VIEW_W, VIEW_H) {
-    r.text('Elige tu bioma (1-4 o click)', VIEW_W / 2 - 140, 130, '#ffe44f', 18);
+    r.text('Elige tu bioma (1-4 o click)', VIEW_W / 2 - 140, 110, '#ffe44f', 18);
 
     // Cards de biomas
     const cardW = 920;
-    const cardH = 50;
+    const cardH = 40;
     const startX = 20;
-    const gap = 60;
+    const gap = 45;
 
     for (let i = 0; i < 4; i++) {
-      const y = 200 + i * (cardH + gap);
+      const y = 140 + i * (cardH + gap);
       const isHovered = this.hoveredBiome === i;
       const isSelected = this.selectedBiome === i;
       const color = this.biomes[i].color;

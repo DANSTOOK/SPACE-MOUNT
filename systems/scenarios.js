@@ -58,7 +58,8 @@ export const BIOME_KEYS = Object.keys(BIOMES);
 
 const STORM_CALM = 30;
 const STORM_DURATION = 2;
-const STORM_SLOW = 0.8;
+const STORM_SLOW = 0.6;  // ralentiza más (antes 0.8)
+const STORM_WARNING = 3;  // segundos antes de que avise de tormenta
 const STAR_DENSITY = 1 / 9000; // estrellas por px² de mundo
 const ROCK_DENSITY = 1 / 90000; // rocas por px² (bioma asteroides)
 const SAFE_RADIUS = 220;        // nada nace sobre el spawn del player (centro)
@@ -128,7 +129,11 @@ export class ScenarioSystem {
       this.stormTimer -= dt;
       if (this.stormTimer <= 0) {
         this.storming = !this.storming;
-        this.stormTimer = this.storming ? STORM_DURATION : STORM_CALM;
+        this.stormTimer = this.storming ? STORM_DURATION : (STORM_CALM + STORM_WARNING);
+        this.stormWarning = !this.storming ? STORM_WARNING : 0; // activa advertencia cuando entra en calma
+      } else if (!this.storming && this.stormTimer <= STORM_WARNING) {
+        // En el período de calma, mostrar advertencia
+        this.stormWarning = this.stormTimer;
       }
     }
 
@@ -196,6 +201,17 @@ export class ScenarioSystem {
   renderForeground(r) {
     if (this.storming) {
       r.rect(0, 0, VIEW_W, VIEW_H, 'rgba(255, 99, 48, 0.08)');
+    }
+
+    // Alerta de tormenta incoming
+    if (this.stormWarning && this.stormWarning > 0) {
+      const alpha = (this.stormWarning / STORM_WARNING) * 0.7; // parpadea
+      const blinkAlpha = Math.sin(this.stormWarning * 4) > 0 ? 0.9 : 0.4;
+      r.text('⚠ TORMENTA INCOMING', VIEW_W / 2 - 130, VIEW_H / 2 - 100,
+             `rgba(255, 150, 0, ${blinkAlpha})`, 20);
+      const timeLeft = Math.ceil(this.stormWarning);
+      r.text(timeLeft + 's', VIEW_W / 2 - 15, VIEW_H / 2 - 60,
+             `rgba(255, 200, 0, ${blinkAlpha})`, 24);
     }
   }
 }

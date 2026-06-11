@@ -1522,7 +1522,8 @@ const BIOMES = {
 const BIOME_KEYS = Object.keys(BIOMES);
 const STORM_CALM = 30;
 const STORM_DURATION = 2;
-const STORM_SLOW = 0.8;
+const STORM_SLOW = 0.6;  // ralentiza más (antes 0.8)
+const STORM_WARNING = 3;  // segundos antes de que avise de tormenta
 const STAR_DENSITY = 1 / 9000; // estrellas por px² de mundo
 const ROCK_DENSITY = 1 / 90000; // rocas por px² (bioma asteroides)
 const SAFE_RADIUS = 220;        // nada nace sobre el spawn del player (centro)
@@ -1584,7 +1585,11 @@ class ScenarioSystem {
       this.stormTimer -= dt;
       if (this.stormTimer <= 0) {
         this.storming = !this.storming;
-        this.stormTimer = this.storming ? STORM_DURATION : STORM_CALM;
+        this.stormTimer = this.storming ? STORM_DURATION : (STORM_CALM + STORM_WARNING);
+        this.stormWarning = !this.storming ? STORM_WARNING : 0; // activa advertencia cuando entra en calma
+      } else if (!this.storming && this.stormTimer <= STORM_WARNING) {
+        // En el período de calma, mostrar advertencia
+        this.stormWarning = this.stormTimer;
       }
     }
     // Rocas a la deriva: rebotan en los bordes del mundo.
@@ -1644,6 +1649,16 @@ class ScenarioSystem {
   renderForeground(r) {
     if (this.storming) {
       r.rect(0, 0, VIEW_W, VIEW_H, 'rgba(255, 99, 48, 0.08)');
+    }
+    // Alerta de tormenta incoming
+    if (this.stormWarning && this.stormWarning > 0) {
+      const alpha = (this.stormWarning / STORM_WARNING) * 0.7; // parpadea
+      const blinkAlpha = Math.sin(this.stormWarning * 4) > 0 ? 0.9 : 0.4;
+      r.text('⚠ TORMENTA INCOMING', VIEW_W / 2 - 130, VIEW_H / 2 - 100,
+             `rgba(255, 150, 0, ${blinkAlpha})`, 20);
+      const timeLeft = Math.ceil(this.stormWarning);
+      r.text(timeLeft + 's', VIEW_W / 2 - 15, VIEW_H / 2 - 60,
+             `rgba(255, 200, 0, ${blinkAlpha})`, 24);
     }
   }
 }
@@ -1960,11 +1975,11 @@ class MenuSystem {
   }
   getHoveredBiome(mouseX, mouseY) {
     const cardW = 920;
-    const cardH = 50;
+    const cardH = 40;
     const startX = 20;
-    const gap = 60;
+    const gap = 45;
     for (let i = 0; i < 4; i++) {
-      const y = 200 + i * (cardH + gap);
+      const y = 140 + i * (cardH + gap);
       if (mouseX >= startX && mouseX <= startX + cardW &&
           mouseY >= y && mouseY <= y + cardH) {
         return i;
@@ -2008,14 +2023,14 @@ class MenuSystem {
     r.text('1-3 o click para seleccionar', VIEW_W / 2 - 140, VIEW_H - 40, '#7df9ff', 12);
   }
   renderBiomeSelect(r, VIEW_W, VIEW_H) {
-    r.text('Elige tu bioma (1-4 o click)', VIEW_W / 2 - 140, 130, '#ffe44f', 18);
+    r.text('Elige tu bioma (1-4 o click)', VIEW_W / 2 - 140, 110, '#ffe44f', 18);
     // Cards de biomas
     const cardW = 920;
-    const cardH = 50;
+    const cardH = 40;
     const startX = 20;
-    const gap = 60;
+    const gap = 45;
     for (let i = 0; i < 4; i++) {
-      const y = 200 + i * (cardH + gap);
+      const y = 140 + i * (cardH + gap);
       const isHovered = this.hoveredBiome === i;
       const isSelected = this.selectedBiome === i;
       const color = this.biomes[i].color;
@@ -2263,19 +2278,20 @@ const input = new Input();
 const session = { kills: 0 };
 // Tracking de mouse para el menú
 let mouseX = 0, mouseY = 0;
+let mouseClickQueue = 0; // contador de clicks sin procesar
 canvas.addEventListener('mousemove', (e) => {
   const rect = canvas.getBoundingClientRect();
   mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
   mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
 });
 canvas.addEventListener('click', () => {
-  input.mouseClick = true;
+  mouseClickQueue++;
 });
 // Limpiar flag de click al final del frame
 const originalEndFrame = input.endFrame.bind(input);
 input.endFrame = function() {
   originalEndFrame();
-  this.mouseClick = false;
+  // mouseClickQueue se limpia después de procesar
 };
 // Todo el estado de partida se recrea en newGame(): reiniciar con R
 // no recarga la página.
@@ -2381,9 +2397,9 @@ function tick(dt) {
       abilitySystem.selectAbility(i);
     }
   }
-  // Detectar click izquierdo para abilities
-  if (input.mouseClick && !input.mouseClickConsumed) {
-    input.mouseClickConsumed = true;
+  // Detectar click izquierdo para abilities (robusto: usa cola de clicks)
+  if (mouseClickQueue > 0) {
+    mouseClickQueue--;
     abilitySystem.activate(enemies, effects);
   }
   // Update cooldowns
