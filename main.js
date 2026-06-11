@@ -6,7 +6,7 @@ import { Renderer, VIEW_W, VIEW_H } from './engine/renderer.js?v=2';
 import { GameLoop } from './engine/gameLoop.js';
 import { Input } from './engine/input.js?v=2';
 import { Player } from './entities/player.js?v=2';
-import { SpawnSystem } from './systems/spawn.js';
+import { SpawnSystem } from './systems/spawn.js?v=2';
 import { CombatSystem } from './systems/combat.js?v=2';
 import { XpSystem } from './systems/xpSystem.js?v=2';
 import { UpgradeSystem } from './systems/upgrades.js?v=2';
@@ -120,9 +120,18 @@ function tick(dt) {
 
   // Los muertos sueltan su orbe y estallan ANTES de la limpieza in-place
   for (const e of enemies) {
-    if (e.isDead) {
+    if (!e.isDead) continue;
+    effects.burst(e.cx, e.cy, e.color, e.elite ? 24 : 10);
+
+    if (e.type === 'boss') {
+      // Botín de jefe: anillo de orbes + sacudida fuerte de recompensa
+      effects.shake(10, 0.4);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        xpSystem.spawnOrb(e.cx + Math.cos(a) * 30, e.cy + Math.sin(a) * 30, 3);
+      }
+    } else {
       xpSystem.spawnOrb(e.cx, e.cy, e.xpValue);
-      effects.burst(e.cx, e.cy, e.color, 10);
     }
   }
   session.kills += removeWhere(enemies, (e) => e.isDead);

@@ -10,15 +10,19 @@ const START_INTERVAL = 2.0; // segundos entre spawns al inicio
 const MIN_INTERVAL = 0.5;   // ritmo máximo
 const RAMP_RATE = 0.025;    // cuánto baja el intervalo por segundo jugado
 
-// Sin combate (hasta Fase 4) los enemigos no mueren: el cap evita
-// llenar la pantalla y degradar FPS.
+// Cap de enemigos normales en pantalla (rendimiento). Los jefes se
+// saltan el cap: son eventos, no relleno.
 const MAX_ENEMIES = 40;
+
+// Oleadas de jefe: aparece uno cada BOSS_INTERVAL segundos de partida.
+const BOSS_INTERVAL = 45;
 
 export class SpawnSystem {
   constructor(biome) {
     this.biome = biome;
     this.elapsed = 0;
     this.timer = START_INTERVAL / biome.enemyMultiplier;
+    this.bossTimer = BOSS_INTERVAL;
   }
 
   get interval() {
@@ -31,19 +35,27 @@ export class SpawnSystem {
   update(dt, enemies, bounds, inside = false) {
     this.elapsed += dt;
     this.timer -= dt;
+    this.bossTimer -= dt;
 
     if (this.timer <= 0 && enemies.length < MAX_ENEMIES) {
       enemies.push(this.spawnOne(bounds, inside));
       this.timer = this.interval;
     }
+
+    // Oleada de jefe: ignora el cap (es un evento, no relleno).
+    if (this.bossTimer <= 0) {
+      enemies.push(this.spawnOne(bounds, inside, 'boss'));
+      this.bossTimer = BOSS_INTERVAL;
+    }
   }
 
   // Tabla de pesos según el tiempo de partida: la dificultad no es
-  // solo cantidad, también variedad. Parásitos desde los 20s, drones
-  // desde los 45s.
+  // solo cantidad, también variedad. Parásitos desde 20s, drones desde
+  // 45s, brutes (élite) desde 30s.
   pickType() {
     const table = [['marciano', 1]];
     if (this.elapsed >= 20) table.push(['parasito', 0.5]);
+    if (this.elapsed >= 30) table.push(['brute', 0.25]);
     if (this.elapsed >= 45) table.push(['drone', 0.35]);
 
     const total = table.reduce((sum, [, w]) => sum + w, 0);
@@ -58,7 +70,7 @@ export class SpawnSystem {
   // Posición aleatoria en un borde aleatorio del rectángulo jugable:
   // fuera (entra caminando) o justo dentro si el mapa es cerrado.
   // Nunca aparece encima del jugador.
-  spawnOne(bounds, inside = false) {
+  spawnOne(bounds, inside = false, type = null) {
     const size = 20;
     const off = inside ? 2 : size + 4; // separación respecto al borde
     const sign = inside ? 1 : -1;
@@ -84,6 +96,6 @@ export class SpawnSystem {
         break;
     }
 
-    return new Enemy(x, y, this.pickType());
+    return new Enemy(x, y, type || this.pickType());
   }
 }

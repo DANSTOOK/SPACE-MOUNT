@@ -36,6 +36,29 @@ export const ENEMY_TYPES = {
     xp: 2,
     behavior: 'ranged',
   },
+  brute: {
+    // Élite: tanque lento que pega fuerte. Lleva barra de vida.
+    hp: 90,
+    speed: 0.7,
+    damage: 18,
+    size: 32,
+    color: '#9b5de5',
+    xp: 5,
+    behavior: 'chase',
+    elite: true,
+  },
+  boss: {
+    // Jefe: mucha vida, lento, enorme. Aparece en oleadas y suelta
+    // un botín grande de XP al morir.
+    hp: 400,
+    speed: 0.5,
+    damage: 28,
+    size: 52,
+    color: '#f15bb5',
+    xp: 25,
+    behavior: 'chase',
+    elite: true,
+  },
 };
 
 // "Arma" del drone (mismo formato que las WEAPONS del player, así
@@ -67,6 +90,7 @@ export class Enemy {
     this.color = def.color;
     this.xpValue = def.xp;
     this.behavior = def.behavior;
+    this.elite = def.elite || false; // dibuja barra de vida si true
     // Cooldown inicial aleatorio: drones que spawnean juntos no
     // disparan en sincronía perfecta.
     this.shootTimer = 1 + Math.random();
@@ -121,5 +145,12 @@ export class Enemy {
     // "Ojos" oscuros: distinguen al enemigo de un simple rectángulo
     r.rect(this.x + 4, this.y + 5, 3, 3, '#0a0a12');
     r.rect(this.x + this.w - 7, this.y + 5, 3, 3, '#0a0a12');
+
+    // Barra de vida para élites y jefes (solo si ya recibieron daño)
+    if (this.elite && this.hp < this.maxHp) {
+      const by = this.y - 7;
+      r.rect(this.x, by, this.w, 4, '#1c2030');
+      r.rect(this.x, by, this.w * (this.hp / this.maxHp), 4, '#39ff14');
+    }
   }
 }
