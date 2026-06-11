@@ -14,6 +14,7 @@ import { XpSystem } from './systems/xpSystem.js?v=2';
 import { UpgradeSystem } from './systems/upgrades.js?v=2';
 import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js?v=2';
 import { Effects } from './systems/effects.js';
+import { DevConsole } from './systems/devConsole.js';
 import { aabb, removeWhere } from './utils/helpers.js';
 
 const canvas = document.getElementById('game');
@@ -26,6 +27,7 @@ const session = { kills: 0 };
 // no recarga la página.
 let player, enemies, projectiles, enemyShots;
 let spawner, combat, xpSystem, upgrades, scenario, effects;
+let devConsole;
 let state = 'menu';    // 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
 let survivalTime;
@@ -42,6 +44,7 @@ function newGame() {
   xpSystem = new XpSystem(player);
   upgrades = new UpgradeSystem(player, combat);
   effects = new Effects();
+  devConsole = new DevConsole();
   session.kills = 0;
   survivalTime = 0;
   state = 'playing';
@@ -102,6 +105,18 @@ function tick(dt) {
     updateLevelUpMenu();
     return; // mundo congelado mientras se elige
   }
+
+  // DevConsole: actualizar y manejar controles
+  devConsole.update(dt, input);
+  if (input.consume('KeyX')) devConsole.export();
+  if (input.consume('KeyV')) {
+    const cfg = prompt('Pega la configuración JSON exportada:');
+    if (cfg) devConsole.import(cfg);
+  }
+  if (input.consume('KeyR') && devConsole.visible) devConsole.reset();
+
+  // Aplicar parámetros del devConsole al juego
+  devConsole.applyToGame(player, combat, spawner, enemies);
 
   survivalTime += dt;
   scenario.update(dt);
@@ -272,6 +287,8 @@ function render() {
   scenario.renderForeground(renderer); // velo de tormenta (pantalla)
 
   renderHud();
+
+  devConsole.render(renderer, VIEW_W, VIEW_H);
 
   if (state === 'levelup') renderLevelUpMenu();
 }
