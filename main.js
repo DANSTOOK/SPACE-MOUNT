@@ -414,4 +414,6 @@ window.SM = {
   get scenario() { return scenario; },
   get state() { return state; },
   get choices() { return choices; },
+  get devConsole() { return devConsole; },
+  get survivalTime() { return survivalTime; },
 };
