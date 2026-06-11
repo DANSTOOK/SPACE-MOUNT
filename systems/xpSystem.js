@@ -10,10 +10,10 @@ const MAGNET_RADIUS = 60;  // px a los que el orbe empieza a volar hacia ti
 const MAGNET_SPEED = 260;  // px/s del vuelo del orbe
 const SCATTER = 8;         // dispersión al soltar (kills apilados no se solapan)
 
-// Curva de nivel: 5, 9, 13, 17... Primeros niveles rápidos (el "hook"
-// del género), después se estira sola.
-const BASE_XP = 5;
-const XP_PER_LEVEL = 4;
+// Curva de nivel: primeros niveles rápidos (hook), después se estira.
+// Reducido para que barra suba más notoriamente
+const BASE_XP = 4;        // primeros 4 XP para llegar a nivel 2
+const XP_PER_LEVEL = 3;   // después +3 cada nivel
 
 class XpOrb {
   constructor(cx, cy, value) {

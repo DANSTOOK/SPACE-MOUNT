@@ -238,12 +238,20 @@ function tick(dt) {
     if (!e.isDead) continue;
     effects.burst(e.cx, e.cy, e.color, e.elite ? 24 : 10);
 
-    if (e.type === 'boss') {
+    if (e.type === 'boss' || e.type === 'boss_elite') {
       // Botín de jefe: anillo de orbes + sacudida fuerte de recompensa
       effects.shake(10, 0.4);
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * Math.PI * 2;
-        xpSystem.spawnOrb(e.cx + Math.cos(a) * 30, e.cy + Math.sin(a) * 30, 3);
+      const orbCount = e.type === 'boss_elite' ? 12 : 8;
+      const xpPerOrb = e.type === 'boss_elite' ? 5 : 3;
+      for (let i = 0; i < orbCount; i++) {
+        const a = (i / orbCount) * Math.PI * 2;
+        xpSystem.spawnOrb(e.cx + Math.cos(a) * 30, e.cy + Math.sin(a) * 30, xpPerOrb);
+      }
+    } else if (e.elite) {
+      // Élite (brute, charger, etc): más XP que enemigos normales
+      for (let i = 0; i < 2; i++) {
+        const a = (i / 2) * Math.PI;
+        xpSystem.spawnOrb(e.cx + Math.cos(a) * 20, e.cy + Math.sin(a) * 20, Math.ceil(e.xpValue * 1.5));
       }
     } else {
       xpSystem.spawnOrb(e.cx, e.cy, e.xpValue);
@@ -282,6 +290,7 @@ function updateMenu() {
 }
 
 function updateLevelUpMenu() {
+  // Teclado: 1, 2, 3
   const keys = ['Digit1', 'Digit2', 'Digit3'];
   for (let i = 0; i < choices.length; i++) {
     if (input.consume(keys[i])) {
@@ -289,6 +298,27 @@ function updateLevelUpMenu() {
       choices = null;
       state = 'playing';
       return;
+    }
+  }
+
+  // Mouse: detectar click en cards de upgrade
+  if (input.mouseClick && !input.mouseClickConsumed) {
+    const cardW = 280;
+    const gap = 80;
+    const totalW = 3 * cardW + 2 * gap;
+    const startX = (VIEW_W - totalW) / 2;
+    const cardY = 215;
+    const cardH = 120;
+
+    for (let i = 0; i < choices.length; i++) {
+      const x = startX + i * (cardW + gap);
+      if (mouseX >= x && mouseX <= x + cardW && mouseY >= cardY && mouseY <= cardY + cardH) {
+        upgrades.apply(choices[i]);
+        choices = null;
+        state = 'playing';
+        input.mouseClickConsumed = true;
+        return;
+      }
     }
   }
 }
