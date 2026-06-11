@@ -1,0 +1,2666 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Space Mount - Standalone</title>
+  <style>
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #05050a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * El canvas tiene una resolución lógica fija (960x540).
+ * CSS lo escala para llenar la ventana manteniendo 16:9,
+ * así el código del juego nunca depende del tamaño de pantalla.
+ */
+canvas {
+  width: min(100vw, calc(100vh * (16 / 9)));
+  aspect-ratio: 16 / 9;
+  image-rendering: pixelated; /* estilo pixel art: sin suavizado al escalar */
+}
+
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <script>
+(function() {
+
+// ============================================
+// utils/helpers.js
+// ============================================
+// Utilidades puras compartidas por todo el juego. Sin estado, sin
+// dependencias: cualquier módulo puede importarlas sin acoplarse.
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+// Elimina in-place los elementos que cumplen el predicado. No crea
+// arrays nuevos por frame y mantiene válidas las referencias
+// compartidas (window.SM, spawner). Devuelve cuántos eliminó.
+function removeWhere(arr, pred) {
+  let removed = 0;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) {
+      arr.splice(i, 1);
+      removed++;
+    }
+  }
+  return removed;
+}
+// Colisión rectángulo-rectángulo (AABB). Espera objetos con x, y, w, h.
+function aabb(a, b) {
+  return (
+    a.x < b.x + b.w &&
+    a.x + a.w > b.x &&
+    a.y < b.y + b.h &&
+    a.y + a.h > b.y
+  );
+}
+
+
+// ============================================
+// engine/renderer.js
+// ============================================
+// Renderer: dueño único del canvas. El resto del juego nunca toca el
+// contexto 2D directamente; solo usa estas primitivas de dibujo.
+// Eso permite cambiar la implementación (capas, cámara, WebGL) sin
+// tocar entidades ni sistemas.
+// Resolución lógica fija. Todas las coordenadas del juego viven en
+// este espacio: origen (0,0) arriba-izquierda, Y crece hacia abajo.
+const VIEW_W = 960;
+const VIEW_H = 540;
+class Renderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    canvas.width = VIEW_W;
+    canvas.height = VIEW_H;
+    this.ctx.imageSmoothingEnabled = false; // pixel art nítido
+  }
+  clear(color = '#0a0a12') {
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+  rect(x, y, w, h, color) {
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x, y, w, h);
+  }
+  circle(x, y, radius, color) {
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  text(str, x, y, color = '#ffffff', size = 14) {
+    this.ctx.fillStyle = color;
+    this.ctx.font = `${size}px monospace`;
+    this.ctx.fillText(str, x, y);
+  }
+  // Cámara: translada el origen para que todo lo dibujado entre
+  // beginWorld() y endWorld() use coordenadas de MUNDO. (camX,camY) es
+  // la esquina superior-izquierda visible del mundo. Pensado para el
+  // mundo (fondo + entidades); el HUD se dibuja fuera, en coords de
+  // pantalla. El redondeo evita "temblor" de subpíxel al moverse.
+  beginWorld(camX, camY) {
+    this.ctx.save();
+    this.ctx.translate(-Math.round(camX), -Math.round(camY));
+  }
+  endWorld() {
+    this.ctx.restore();
+  }
+}
+
+
+// ============================================
+// engine/gameLoop.js
+// ============================================
+// GameLoop: corazón del engine. Usa requestAnimationFrame y entrega
+// delta time (dt, en segundos) a update(), de modo que la velocidad
+// del juego sea independiente de los FPS del monitor (60Hz, 144Hz...).
+// dt máximo permitido. Si la pestaña estuvo en background, el primer
+// frame al volver puede traer un dt enorme; lo recortamos para evitar
+// "saltos" de física (enemigos teletransportándose, etc.).
+const MAX_DT = 1 / 30;
+class GameLoop {
+  constructor({ update, render }) {
+    this.update = update;
+    this.render = render;
+    this.running = false;
+    this.lastTime = 0;
+    this.fps = 0;
+    this._frame = this._frame.bind(this);
+  }
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this.lastTime = performance.now();
+    requestAnimationFrame(this._frame);
+  }
+  stop() {
+    this.running = false;
+  }
+  _frame(now) {
+    if (!this.running) return;
+    const rawDt = (now - this.lastTime) / 1000;
+    this.lastTime = now;
+    // FPS suavizado (media móvil exponencial) para el HUD de debug
+    if (rawDt > 0) {
+      this.fps = this.fps * 0.9 + (1 / rawDt) * 0.1;
+    }
+    const dt = Math.min(rawDt, MAX_DT);
+    this.update(dt);
+    this.render();
+    requestAnimationFrame(this._frame);
+  }
+}
+
+
+// ============================================
+// engine/input.js
+// ============================================
+// Input: traduce eventos del navegador a un estado consultable.
+// El gameplay nunca escucha eventos del DOM directamente; cada frame
+// pregunta "¿está esta tecla presionada?". Eso desacopla la lógica del
+// navegador y permite añadir gamepad/touch después sin tocar entidades.
+class Input {
+  constructor(target = window) {
+    this.keys = new Set();
+    // Flancos: teclas recién presionadas este "instante", para menús.
+    // isDown responde "¿está presionada?"; consume responde "¿acaba de
+    // presionarse?" exactamente una vez (mantenerla no re-dispara).
+    this.pressed = new Set();
+    target.addEventListener('keydown', (e) => {
+      if (!e.repeat) this.pressed.add(e.code);
+      this.keys.add(e.code);
+      // Evita que flechas/espacio hagan scroll de la página
+      if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+    });
+    target.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      // NO borramos el flanco aquí: si un tap entero (keydown+keyup)
+      // cae dentro de un mismo frame, update() debe poder verlo. Los
+      // flancos se limpian en endFrame(), tras el update.
+    });
+    // Si la ventana pierde foco, soltamos todo: evita teclas "pegadas"
+    // al volver de alt-tab.
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.pressed.clear();
+    });
+  }
+  isDown(code) {
+    return this.keys.has(code);
+  }
+  consume(code) {
+    if (!this.pressed.has(code)) return false;
+    this.pressed.delete(code);
+    return true;
+  }
+  // Llamar al final de cada frame, después de todos los consume(): los
+  // flancos no consumidos caducan aquí (no en keyup), de modo que un
+  // tap completo dentro de un frame nunca se pierde.
+  endFrame() {
+    this.pressed.clear();
+  }
+  // Ejes de movimiento normalizados a -1/0/1 (WASD + flechas).
+  // El player consume estos ejes, no teclas sueltas: si mañana hay
+  // gamepad, solo cambia cómo se calculan aquí.
+  get axisX() {
+    return (
+      (this.isDown('KeyD') || this.isDown('ArrowRight') ? 1 : 0) -
+      (this.isDown('KeyA') || this.isDown('ArrowLeft') ? 1 : 0)
+    );
+  }
+  get axisY() {
+    return (
+      (this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0) -
+      (this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0)
+    );
+  }
+}
+
+
+// ============================================
+// entities/player.js
+// ============================================
+// Dan Armstrong — astronauta explorador interplanetario (alemán).
+// Entidad controlada por el jugador: movimiento, colisión con límites
+// del mapa y recepción de daño. No sabe nada de enemigos ni armas;
+// eso vive en systems/ (fases 3-4).
+;
+// Stats base exactos de la spec. speed está en "px por frame @60fps"
+// (la unidad clásica del género); se convierte a px/segundo abajo.
+const BASE_STATS = {
+  hp: 100,         // también es la vida MÁXIMA (this.hp es la vida actual)
+  speed: 3.2,      // aumentado para más agilidad (de 2 a 3.2)
+  damage: 10,      // reservado (las armas llevan su propio daño)
+  attackSpeed: 1,  // multiplicador de cadencia
+  range: 100,
+  regen: 0,        // vida regenerada por segundo (power-up)
+  magnet: 60,      // radio de recogida de orbes de XP en px (power-up)
+  xpMult: 1,       // multiplicador de XP ganada (power-up)
+  multishot: 0,    // proyectiles extra por disparo (power-up)
+  crit: 0,         // probabilidad de golpe crítico 0..1 (power-up)
+  critMult: 2,     // multiplicador de daño en crítico
+  shieldMax: 0,    // cargas de escudo máximas (power-up)
+};
+const SPEED_SCALE = 60; // speed de la spec -> px/segundo (para usar dt)
+const INVULN_TIME = 0.5; // i-frames tras recibir daño (estándar del género)
+const SHIELD_REGEN = 6;  // segundos para recuperar 1 carga de escudo
+class Player {
+  constructor(cx, cy) {
+    this.w = 24;
+    this.h = 24;
+    this.x = cx - this.w / 2;
+    this.y = cy - this.h / 2;
+    // Copia de los stats: los upgrades (Fase 5) modifican esta copia,
+    // nunca los BASE_STATS compartidos.
+    this.stats = { ...BASE_STATS };
+    this.hp = this.stats.hp;
+    this.invulnTimer = 0;
+    // Escudo: cargas actuales que absorben golpes (power-up). Se
+    // regeneran con el tiempo hasta stats.shieldMax.
+    this.shield = 0;
+    this.shieldTimer = SHIELD_REGEN;
+    // Combo meter: cada golpe suma combo, multiplica daño hasta x2.0
+    this.combo = 0;
+    this.comboTimer = 0;
+    // Multiplicador ambiental (bioma): baja gravedad, tormentas...
+    // Lo fija main.js cada frame desde el ScenarioSystem.
+    this.envSpeedMult = 1;
+    // Última dirección de movimiento: el auto-ataque (Fase 4) la usará
+    // como dirección de apuntado por defecto.
+    this.facingX = 1;
+    this.facingY = 0;
+    // Dash defensivo: movimiento rápido en línea recta, esquivo temporal
+    this.dashTimer = 0;      // tiempo restante del dash en segundos
+    this.dashCooldown = 0;   // tiempo antes de poder hacer otro dash
+    this.dashMaxDuration = 0.3;   // duración del dash en segundos
+    this.dashMaxCooldown = 1.5;   // tiempo entre dashes (barra de recarga)
+    this.dashSpeed = 8;      // velocidad durante el dash (en SPEED_SCALE units)
+  }
+  get cx() { return this.x + this.w / 2; }
+  get cy() { return this.y + this.h / 2; }
+  get isDead() { return this.hp <= 0; }
+  update(dt, input, bounds) {
+    // Actualizar cooldowns
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    if (this.dashTimer > 0) this.dashTimer -= dt;
+    // Dash defensivo: Space = esquivo rápido en la dirección actual
+    if (input.consume('Space') && this.dashCooldown <= 0) {
+      this.dashTimer = this.dashMaxDuration;
+      this.dashCooldown = this.dashMaxCooldown;
+      this.invulnTimer = this.dashMaxDuration; // iframes durante el dash
+    }
+    // Movimiento unidireccional: solo adelante en la dirección que mira
+    let moving = false;
+    if (input.axisX !== 0 || input.axisY !== 0) {
+      const len = Math.hypot(input.axisX, input.axisY);
+      this.facingX = input.axisX / len;
+      this.facingY = input.axisY / len;
+      moving = true;
+    }
+    // Aplicar velocidad: normal o dash
+    const isInDash = this.dashTimer > 0;
+    const speed = isInDash ? this.dashSpeed : this.stats.speed;
+    const v = speed * SPEED_SCALE * this.envSpeedMult;
+    if (moving || isInDash) {
+      this.x += this.facingX * v * dt;
+      this.y += this.facingY * v * dt;
+    }
+    // Colisión con los límites del mapa (rectángulo {x,y,w,h}): clamp.
+    this.x = clamp(this.x, bounds.x, bounds.x + bounds.w - this.w);
+    this.y = clamp(this.y, bounds.y, bounds.y + bounds.h - this.h);
+    if (this.invulnTimer > 0) this.invulnTimer -= dt;
+    // Combo meter: cada golpe suma combo (+5% daño), se resetea si pasan 1s sin golpear
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt;
+    } else if (this.combo > 0) {
+      this.combo = 0; // resetear
+    }
+    // Regeneración pasiva (power-up): cura sin pasar de la vida máxima.
+    if (this.stats.regen > 0 && this.hp < this.stats.hp) {
+      this.hp = Math.min(this.stats.hp, this.hp + this.stats.regen * dt);
+    }
+    // Recarga de escudo (power-up): +1 carga cada SHIELD_REGEN s.
+    if (this.stats.shieldMax > 0 && this.shield < this.stats.shieldMax) {
+      this.shieldTimer -= dt;
+      if (this.shieldTimer <= 0) {
+        this.shield++;
+        this.shieldTimer = SHIELD_REGEN;
+      }
+    }
+  }
+  // Devuelve true si hubo impacto (para el screen shake). Si hay escudo,
+  // consume una carga y NO pierde vida. Devuelve false si estaba en
+  // i-frames o ya muerto.
+  takeDamage(amount) {
+    if (this.invulnTimer > 0 || this.isDead) return false;
+    this.invulnTimer = INVULN_TIME;
+    if (this.shield > 0) {
+      this.shield--;                 // el escudo absorbe el golpe
+      this.shieldTimer = SHIELD_REGEN; // y reinicia su recarga
+      return true;
+    }
+    this.hp = Math.max(0, this.hp - amount);
+    return true;
+  }
+  render(r) {
+    // Parpadeo durante i-frames: feedback visual de invulnerabilidad
+    if (this.invulnTimer > 0 && Math.floor(this.invulnTimer * 10) % 2 === 0) {
+      return;
+    }
+    // Color cambia a cian durante dash (velocidad máxima)
+    let bodyColor = '#39ff14';
+    if (this.dashTimer > 0) {
+      bodyColor = '#7df9ff'; // destello cian durante dash
+    }
+    // Placeholder pixel-art: traje + visor
+    r.rect(this.x, this.y, this.w, this.h, bodyColor);
+    r.rect(this.x + 5, this.y + 5, this.w - 10, 8, '#7df9ff');
+    // Indicador de dirección: flecha adelante en la dirección que mira
+    r.rect(
+      this.cx - 2 + this.facingX * 18,
+      this.cy - 2 + this.facingY * 18,
+      4, 4, '#ff4f30'
+    );
+    // Aura de escudo: marco cian alrededor del player por cada carga
+    // (capas concéntricas = cuántas cargas tiene).
+    for (let i = 0; i < this.shield; i++) {
+      const pad = 4 + i * 3;
+      const x = this.x - pad;
+      const y = this.y - pad;
+      const w = this.w + pad * 2;
+      const h = this.h + pad * 2;
+      r.rect(x, y, w, 2, '#7df9ff');
+      r.rect(x, y + h - 2, w, 2, '#7df9ff');
+      r.rect(x, y, 2, h, '#7df9ff');
+      r.rect(x + w - 2, y, 2, h, '#7df9ff');
+    }
+  }
+}
+
+
+// ============================================
+// entities/enemy.js
+// ============================================
+// Enemigos: una sola clase + tabla de tipos. Los tipos son datos, no
+// subclases; las variaciones de IA se ramifican en update() según el
+// comportamiento declarado en la tabla.
+;
+// speed en "px por frame @60fps" (misma convención que el player).
+const ENEMY_TYPES = {
+  marciano: {
+    hp: 20,
+    speed: 1.2,
+    damage: 8,     // bajado de 10 (balance)
+    size: 20,
+    color: '#ff3864',
+    xp: 1,
+    behavior: 'chase',
+  },
+  parasito: {
+    // Frágil pero el doble de rápido que el player: obliga a moverse
+    // en ángulos en vez de huir en línea recta.
+    hp: 10,
+    speed: 2.6,
+    damage: 3,     // bajado de 5 (balance)
+    size: 14,
+    color: '#b14fff',
+    xp: 1,
+    behavior: 'chase',
+  },
+  drone: {
+    // Mantiene distancia y dispara: castiga quedarse quieto.
+    hp: 30,
+    speed: 0.9,
+    damage: 6,     // bajado de 8 (balance)
+    size: 18,
+    color: '#4fa9ff',
+    xp: 2,
+    behavior: 'ranged',
+  },
+  brute: {
+    // Élite: tanque lento que pega fuerte. Lleva barra de vida.
+    hp: 90,
+    speed: 0.7,
+    damage: 18,
+    size: 32,
+    color: '#9b5de5',
+    xp: 5,
+    behavior: 'chase',
+    elite: true,
+  },
+  boss: {
+    // Jefe: mucha vida, lento, enorme. Aparece en oleadas y suelta
+    // un botín grande de XP al morir.
+    hp: 400,
+    speed: 0.5,
+    damage: 28,
+    size: 52,
+    color: '#f15bb5',
+    xp: 25,
+    behavior: 'chase',
+    elite: true,
+  },
+  charger: {
+    // Embiste: se acerca, telegrafía y se lanza en línea recta muy
+    // rápido. Hay que esquivar la embestida.
+    hp: 40,
+    speed: 0.8,
+    damage: 16,
+    size: 24,
+    color: '#ff9f1c',
+    xp: 3,
+    behavior: 'charger',
+  },
+  splitter: {
+    // Al morir se parte en 2 splitlings rápidos: matarlo crea más.
+    hp: 50,
+    speed: 1.0,
+    damage: 12,
+    size: 26,
+    color: '#2ec4b6',
+    xp: 3,
+    behavior: 'chase',
+    splits: 2,
+    splitInto: 'splitling',
+  },
+  splitling: {
+    // Cría del splitter: diminuto, rápido, frágil. No se vuelve a partir.
+    hp: 8,
+    speed: 2.2,
+    damage: 6,
+    size: 12,
+    color: '#2ec4b6',
+    xp: 1,
+    behavior: 'chase',
+  },
+  healer: {
+    // Support: cura a otros enemigos cercanos (200px). No ataca directo.
+    // Objetivo prioritario para el jugador. Aparece a los 90s.
+    hp: 25,
+    speed: 1.0,
+    damage: 0,      // no ataca por contacto
+    size: 20,
+    color: '#10f950', // neón verde medicina
+    xp: 4,
+    behavior: 'support',
+    healPower: 5,   // cura 5 hp/s a aliados
+    healRange: 200, // px de radio
+  },
+  boss_elite: {
+    // Jefe con patrón: persigue, pero cada 3s hace un estallido de
+    // proyectiles enemigos en 8 direcciones. Telegrafía visible.
+    hp: 500,
+    speed: 0.4,
+    damage: 22,
+    size: 56,
+    color: '#ff006e', // rosa intenso jefe
+    xp: 50,
+    behavior: 'boss_elite',
+    elite: true,
+    burstCooldown: 3,  // segundos entre ráfagas
+    burstCount: 8,     // proyectiles en ráfaga
+  },
+};
+// "Arma" del drone (mismo formato que las WEAPONS del player, así
+// Projectile sirve para ambos bandos).
+const DRONE_SHOT = {
+  damage: 8,
+  projectileSpeed: 3.5,
+  pierce: false,
+  color: '#7db4ff',
+};
+const DRONE_PREFERRED_DIST = 180; // px que intenta mantener
+const DRONE_FIRE_RANGE = 320;
+const DRONE_COOLDOWN = 2; // segundos entre disparos
+// Charger: acercarse, telegrafiar (windup) y embestir (dash).
+const CHARGE_RANGE = 260;     // px a los que decide embestir
+const CHARGE_WIND = 0.5;      // s de telegrafía (quieto, parpadea)
+const CHARGE_DUR = 0.35;      // s de duración de la embestida
+const CHARGE_SPEED = 430;     // px/s durante la embestida (muy rápido)
+const CHARGE_COOLDOWN = 2.5;  // s entre embestidas
+const SPEED_SCALE = 60; // px/frame@60fps -> px/segundo
+class Enemy {
+  constructor(x, y, type) {
+    const def = ENEMY_TYPES[type];
+    this.type = type;
+    this.x = x;
+    this.y = y;
+    this.w = def.size;
+    this.h = def.size;
+    this.speed = def.speed * SPEED_SCALE;
+    this.damage = def.damage;
+    this.hp = def.hp;
+    this.maxHp = def.hp;
+    this.color = def.color;
+    this.xpValue = def.xp;
+    this.behavior = def.behavior;
+    this.elite = def.elite || false; // dibuja barra de vida si true
+    this.splits = def.splits || 0;       // nº de crías al morir
+    this.splitInto = def.splitInto || null;
+    // Cooldown inicial aleatorio: drones que spawnean juntos no
+    // disparan en sincronía perfecta.
+    this.shootTimer = 1 + Math.random();
+    this.hitFlash = 0; // segundos restantes de parpadeo blanco al ser golpeado
+    // Estado del charger (embestida)
+    this.dashTime = 0;
+    this.windT = 0;
+    this.dashX = 0;
+    this.dashY = 0;
+    this.chargeCd = 1 + Math.random() * 2;
+    // Boss Elite (fases): fase 1 = ráfagas, fase 2 (a 50% HP) = spin attack
+    this.phase = 1;
+  }
+  get cx() { return this.x + this.w / 2; }
+  get cy() { return this.y + this.h / 2; }
+  get isDead() { return this.hp <= 0; }
+  takeDamage(amount) {
+    this.hp = Math.max(0, this.hp - amount);
+    this.hitFlash = 0.08; // breve flash blanco
+  }
+  // shots: array compartido de proyectiles enemigos (lo llena el drone)
+  update(dt, player, shots) {
+    if (this.hitFlash > 0) this.hitFlash -= dt;
+    const dx = player.cx - this.cx;
+    const dy = player.cy - this.cy;
+    const dist = Math.hypot(dx, dy) || 1;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    if (this.behavior === 'ranged') {
+      // Acercarse si está lejos, retroceder si está demasiado cerca
+      if (dist > DRONE_PREFERRED_DIST + 20) {
+        this.x += nx * this.speed * dt;
+        this.y += ny * this.speed * dt;
+      } else if (dist < DRONE_PREFERRED_DIST - 20) {
+        this.x -= nx * this.speed * dt;
+        this.y -= ny * this.speed * dt;
+      }
+      this.shootTimer -= dt;
+      if (this.shootTimer <= 0 && dist <= DRONE_FIRE_RANGE) {
+        shots.push(new Projectile(this.cx, this.cy, nx, ny, DRONE_SHOT));
+        this.shootTimer = DRONE_COOLDOWN;
+      }
+      return;
+    }
+    if (this.behavior === 'charger') {
+      if (this.dashTime > 0) {
+        // Embistiendo: dirección fija a alta velocidad
+        this.dashTime -= dt;
+        this.x += this.dashX * CHARGE_SPEED * dt;
+        this.y += this.dashY * CHARGE_SPEED * dt;
+      } else if (this.windT > 0) {
+        // Telegrafía: quieto un instante; al terminar fija el rumbo
+        this.windT -= dt;
+        if (this.windT <= 0) {
+          this.dashX = nx;
+          this.dashY = ny;
+          this.dashTime = CHARGE_DUR;
+        }
+      } else {
+        // Acercarse lento; al estar en rango y con el cooldown listo,
+        // empieza la telegrafía de embestida.
+        this.x += nx * this.speed * dt;
+        this.y += ny * this.speed * dt;
+        this.chargeCd -= dt;
+        if (dist < CHARGE_RANGE && this.chargeCd <= 0) {
+          this.windT = CHARGE_WIND;
+          this.chargeCd = CHARGE_COOLDOWN;
+        }
+      }
+      return;
+    }
+    if (this.behavior === 'support') {
+      // Healer: se acerca lentamente al player pero no ataca. Se cura
+      // desde arriba si ve aliados en rango. Comportamiento: "orbita" sin
+      // agredir; el jugador lo matará para eliminar el soporte enemigo.
+      // (La cura a aliados la maneja main.js en el loop de enemigos.)
+      this.x += nx * this.speed * dt;
+      this.y += ny * this.speed * dt;
+      return;
+    }
+    if (this.behavior === 'boss_elite') {
+      // Cambiar a fase 2 a 50% HP: spin attack (gira y persigue)
+      if (this.hp <= this.maxHp / 2 && this.phase === 1) {
+        this.phase = 2;
+        this.spinAngle = 0;
+      }
+      if (this.phase === 2) {
+        // Fase 2: gira mientras persigue (spin attack)
+        this.spinAngle = (this.spinAngle || 0) + 6 * dt; // 6 rad/s = ~1 vuelta por s
+        // Persigue pero girada (visual de spin)
+        this.x += nx * this.speed * 0.8 * dt;
+        this.y += ny * this.speed * 0.8 * dt;
+      } else {
+        // Fase 1: persigue normalito
+        this.x += nx * this.speed * dt;
+        this.y += ny * this.speed * dt;
+      }
+      // El contador de ráfaga lo maneja main.js (necesita acceso a shots).
+      return;
+    }
+    // 'chase' (marciano, parásito, brute, boss, splitter): persecución
+    this.x += nx * this.speed * dt;
+    this.y += ny * this.speed * dt;
+  }
+  render(r) {
+    // Color del cuerpo: blanco al recibir impacto; parpadeo de aviso
+    // mientras el charger telegrafía o boss_elite en fase 2 (spin).
+    let color = this.color;
+    if (this.hitFlash > 0) color = '#ffffff';
+    else if (this.windT > 0 && Math.floor(this.windT * 16) % 2 === 0) color = '#fff2a8';
+    else if (this.phase === 2 && Math.floor((this.spinAngle || 0) / 1.5) % 3 !== 0) color = '#fff2a8'; // amarillo parpadeante en spin
+    // Boss fase 2 = rotación visual (solo dibujo, no físicas)
+    if (this.phase === 2) {
+      // Dibujar 4 líneas rotando desde el centro
+      const cx = this.x + this.w / 2;
+      const cy = this.y + this.h / 2;
+      for (let i = 0; i < 4; i++) {
+        const a = (this.spinAngle || 0) + (i * Math.PI / 2);
+        const r2 = this.w / 2 + 4;
+        const x1 = cx + Math.cos(a) * r2;
+        const y1 = cy + Math.sin(a) * r2;
+        // Dibujar puntito en la punta de la línea
+        r.rect(x1 - 2, y1 - 2, 4, 4, '#fff2a8');
+      }
+    }
+    r.rect(this.x, this.y, this.w, this.h, color);
+    // "Ojos" oscuros: distinguen al enemigo de un simple rectángulo
+    r.rect(this.x + 4, this.y + 5, 3, 3, '#0a0a12');
+    r.rect(this.x + this.w - 7, this.y + 5, 3, 3, '#0a0a12');
+    // Barra de vida para élites y jefes (solo si ya recibieron daño)
+    if (this.elite && this.hp < this.maxHp) {
+      const by = this.y - 7;
+      r.rect(this.x, by, this.w, 4, '#1c2030');
+      r.rect(this.x, by, this.w * (this.hp / this.maxHp), 4, '#39ff14');
+    }
+  }
+}
+
+
+// ============================================
+// entities/projectile.js
+// ============================================
+// Proyectil: viaja en línea recta con dirección normalizada y daña
+// enemigos al impactar (la colisión la resuelve systems/combat.js).
+// Se auto-marca muerto al salir de pantalla: nada vive fuera del mundo.
+const SPEED_SCALE = 60; // px/frame@60fps -> px/segundo (convención global)
+const SIZE = 6;
+const OFFSCREEN_MARGIN = 20;
+class Projectile {
+  constructor(cx, cy, dirX, dirY, weapon) {
+    this.w = SIZE;
+    this.h = SIZE;
+    this.x = cx - SIZE / 2;
+    this.y = cy - SIZE / 2;
+    this.dirX = dirX;
+    this.dirY = dirY;
+    this.speed = weapon.projectileSpeed * SPEED_SCALE;
+    this.damage = weapon.damage;
+    this.pierce = weapon.pierce;
+    this.color = weapon.color;
+    this.dead = false;
+    this.splash = weapon.splash || 0; // radio de daño en área al impactar
+    this.crit = false;                // combat lo marca si el disparo fue crítico
+    // Rebotes restantes (electric chain) y enemigos ya golpeados
+    // (para no rebotar en círculos sobre el mismo objetivo).
+    this.chainLeft = weapon.chain || 0;
+    this.hit = new Set();
+    // Armas especiales
+    this.kind = weapon.kind || 'normal';
+    // Boomerang: vuelve al jugador después de returnTime
+    this.returnTime = weapon.returnTime || 0;
+    this.lifespan = 0;
+    this.isReturning = false;
+    // Granada: explota después de fuseTime
+    this.fuseTime = weapon.fuseTime || 0;
+    this.fuse = 0;
+  }
+  get cx() { return this.x + this.w / 2; }
+  get cy() { return this.y + this.h / 2; }
+  // bounds es un rectángulo {x, y, w, h}: en mapas cerrados los
+  // proyectiles mueren en los muros, no en el borde de la pantalla.
+  update(dt, bounds, playerCx = null, playerCy = null) {
+    // Granada: cuenta hacia explosión
+    if (this.kind === 'grenade') {
+      this.fuse += dt;
+      if (this.fuse >= this.fuseTime) {
+        this.dead = true; // marca para explotar en main
+        return;
+      }
+    }
+    // Boomerang: viaja, después vuelve al jugador
+    if (this.kind === 'boomerang') {
+      this.lifespan += dt;
+      if (this.lifespan >= this.returnTime && !this.isReturning) {
+        this.isReturning = true;
+      }
+      if (this.isReturning && playerCx && playerCy) {
+        const dx = playerCx - this.cx;
+        const dy = playerCy - this.cy;
+        const len = Math.hypot(dx, dy) || 1;
+        this.dirX = dx / len;
+        this.dirY = dy / len;
+        // Si llega al jugador, muere
+        if (len < 20) {
+          this.dead = true;
+          return;
+        }
+      }
+    }
+    this.x += this.dirX * this.speed * dt;
+    this.y += this.dirY * this.speed * dt;
+    if (
+      this.x < bounds.x - OFFSCREEN_MARGIN ||
+      this.x > bounds.x + bounds.w + OFFSCREEN_MARGIN ||
+      this.y < bounds.y - OFFSCREEN_MARGIN ||
+      this.y > bounds.y + bounds.h + OFFSCREEN_MARGIN
+    ) {
+      this.dead = true;
+    }
+  }
+  render(r) {
+    r.rect(this.x, this.y, this.w, this.h, this.color);
+  }
+}
+
+
+// ============================================
+// systems/spawn.js
+// ============================================
+// SpawnSystem: decide cuándo y dónde nacen enemigos. Los enemigos
+// aparecen en un anillo justo FUERA de la pantalla alrededor del
+// player (estándar survivor): siempre entran desde el borde visible,
+// nunca encima de ti, sin importar por dónde te muevas en el mundo.
+;
+// Rampa de dificultad: el intervalo entre spawns baja con el tiempo (más gradual).
+const START_INTERVAL = 3.5;      // empezar más lento
+const MIN_INTERVAL = 0.8;         // no llegar tan rápido al mínimo
+const RAMP_RATE = 0.008;         // escalar más lentamente
+// Cap de enemigos normales (rendimiento). Los jefes lo ignoran.
+const MAX_ENEMIES = 30;           // reducido de 50 para menos caos
+// Oleadas de jefe cada BOSS_INTERVAL segundos.
+const BOSS_INTERVAL = 45;
+// Distancia de aparición: justo más allá de la media-diagonal del
+// viewport (~550px) para que nazcan fuera de cámara.
+const SPAWN_DIST = 560;
+class SpawnSystem {
+  constructor(biome) {
+    this.biome = biome;
+    this.elapsed = 0;
+    this.timer = START_INTERVAL / biome.enemyMultiplier;
+    this.bossTimer = BOSS_INTERVAL;
+  }
+  get interval() {
+    const base = Math.max(MIN_INTERVAL, START_INTERVAL - this.elapsed * RAMP_RATE);
+    return base / this.biome.enemyMultiplier;
+  }
+  update(dt, enemies, player, world) {
+    this.elapsed += dt;
+    this.timer -= dt;
+    this.bossTimer -= dt;
+    if (this.timer <= 0 && enemies.length < MAX_ENEMIES) {
+      enemies.push(this.spawnOne(player, world));
+      this.timer = this.interval;
+    }
+    // Oleada de jefe: ignora el cap (es un evento, no relleno).
+    if (this.bossTimer <= 0) {
+      enemies.push(this.spawnOne(player, world, 'boss'));
+      this.bossTimer = BOSS_INTERVAL;
+    }
+  }
+  // Tabla de pesos según el tiempo: variedad creciente. Parásitos
+  // desde 45s, brutes (élite) 75s, drones 120s, charger 180s, splitter 240s.
+  pickType() {
+    const table = [['marciano', 1]];
+    if (this.elapsed >= 45) table.push(['parasito', 0.5]);
+    if (this.elapsed >= 75) table.push(['brute', 0.25]);
+    if (this.elapsed >= 120) table.push(['drone', 0.35]);
+    if (this.elapsed >= 180) table.push(['charger', 0.3]);
+    if (this.elapsed >= 240) table.push(['splitter', 0.3]);
+    const total = table.reduce((sum, [, w]) => sum + w, 0);
+    let roll = Math.random() * total;
+    for (const [type, w] of table) {
+      roll -= w;
+      if (roll <= 0) return type;
+    }
+    return 'marciano';
+  }
+  // Anillo alrededor del player, justo fuera de cámara, clampeado al
+  // mundo para que no nazca fuera de los límites del escenario.
+  spawnOne(player, world, type = null) {
+    const size = 24;
+    const ang = Math.random() * Math.PI * 2;
+    const dist = SPAWN_DIST + Math.random() * 140;
+    let x = player.cx + Math.cos(ang) * dist;
+    let y = player.cy + Math.sin(ang) * dist;
+    x = Math.max(0, Math.min(x, world.w - size));
+    y = Math.max(0, Math.min(y, world.h - size));
+    return new Enemy(x, y, type || this.pickType());
+  }
+  // Crea un enemigo en una posición concreta (lo usa main para las
+  // crías del splitter al morir).
+  spawnAt(x, y, type) {
+    return new Enemy(x, y, type);
+  }
+}
+
+
+// ============================================
+// systems/combat.js
+// ============================================
+// CombatSystem: dueño del auto-ataque. Maneja tres CLASES de arma:
+//  - 'ranged' (por defecto): dispara proyectiles al enemigo más cercano.
+//  - 'orbit': cuchillas que giran alrededor del player y cortan al tocar.
+//  - 'melee': barrido en arco corto hacia el enemigo más cercano.
+// No elimina nada de los arrays: solo marca; main.js limpia.
+;
+;
+const WEAPONS = {
+  raygun: {
+    name: 'Raygun',
+    damage: 20,
+    fireRate: 1, // disparos por segundo
+    projectileSpeed: 5,
+    pierce: false,
+    color: '#7df9ff',
+  },
+  blaster: {
+    name: 'Blaster',
+    damage: 12,
+    fireRate: 2,
+    projectileSpeed: 6,
+    pierce: true, // atraviesa enemigos: bueno contra filas
+    color: '#ffa12d',
+  },
+  electric_chain: {
+    name: 'Electric Chain',
+    damage: 10,
+    fireRate: 0.8,
+    projectileSpeed: 7,
+    pierce: false,
+    chain: 3, // rebota hasta 3 veces al enemigo vivo más cercano
+    color: '#e8ff4f',
+  },
+  shotgun: {
+    name: 'Escopeta',
+    damage: 8,
+    fireRate: 1.1,
+    projectileSpeed: 6,
+    pierce: false,
+    count: 4,      // dispara 4 perdigones...
+    spread: 0.5,   // ...en abanico (radianes)
+    color: '#ff8a3d',
+  },
+  missile: {
+    name: 'Misil',
+    damage: 30,
+    fireRate: 0.6,
+    projectileSpeed: 4,
+    pierce: false,
+    splash: 70,    // explota en área al impactar
+    color: '#ff5a3c',
+  },
+  orb_blade: {
+    name: 'Cuchilla Orbital',
+    kind: 'orbit',
+    damage: 14,
+    count: 2,           // nº de cuchillas (el multishot suma más)
+    orbitRadius: 58,    // distancia al player en px
+    orbitSpeed: 3.4,    // velocidad de giro (rad/s)
+    hitInterval: 0.35,  // s mínimos entre golpes a un mismo enemigo
+    color: '#7df9ff',
+  },
+  saber: {
+    name: 'Sable',
+    kind: 'melee',
+    damage: 26,
+    fireRate: 1.6,      // barridos por segundo
+    reach: 78,          // alcance del arco en px
+    arc: 1.5,           // amplitud del arco en radianes
+    color: '#e8ff4f',
+  },
+  laser: {
+    name: 'Láser',
+    kind: 'beam',
+    damage: 5,          // daño bajo pero dispara mientras presiona
+    projectileSpeed: 12, // muy rápido
+    pierce: true,       // atraviesa
+    color: '#ff00ff',   // magenta
+  },
+  boomerang: {
+    name: 'Bumerán',
+    kind: 'boomerang',
+    damage: 18,
+    projectileSpeed: 8,
+    pierce: false,
+    returnTime: 1.5,    // segundos en ir y volver
+    color: '#ffaa00',   // naranja
+  },
+  grenade: {
+    name: 'Granada',
+    kind: 'grenade',
+    damage: 35,
+    fireRate: 0.7,
+    projectileSpeed: 5,
+    splash: 100,        // grande AOE
+    fuseTime: 2,        // segundos antes de explotar
+    color: '#00ff00',   // verde
+  },
+};
+const CHAIN_RANGE = 240;  // px máximos de un rebote
+const CHAIN_DECAY = 0.8;  // el daño decae 20% por rebote
+const BLADE_RADIUS = 10;  // radio de golpe de una cuchilla orbital
+class CombatSystem {
+  constructor(player) {
+    this.player = player;
+    // Cada arma equipada lleva su propio estado mutable (cooldown,
+    // ángulo de órbita, etc.). Empieza solo con la Raygun.
+    this.weapons = [{ ...WEAPONS.raygun, cooldown: 0 }];
+    // Transitorios para render: posiciones de cuchillas este frame y
+    // barridos de melee que se están desvaneciendo.
+    this.blades = [];
+    this.swings = [];
+  }
+  equip(key) {
+    this.weapons.push({ ...WEAPONS[key], cooldown: 0 });
+  }
+  // Claves de WEAPONS aún no equipadas (para el upgrade new_weapon)
+  get unequippedKeys() {
+    return Object.keys(WEAPONS).filter(
+      (k) => !this.weapons.some((w) => w.name === WEAPONS[k].name)
+    );
+  }
+  // Tira un crítico según los stats del player. Devuelve {value, crit}.
+  rollCrit(base) {
+    const st = this.player.stats;
+    if (Math.random() < (st.crit || 0)) {
+      return { value: Math.round(base * (st.critMult || 2)), crit: true };
+    }
+    return { value: base, crit: false };
+  }
+  update(dt, enemies, projectiles, bounds, effects = null) {
+    // Caducar barridos de melee y limpiar cuchillas del frame anterior
+    for (const s of this.swings) s.life -= dt;
+    this.swings = this.swings.filter((s) => s.life > 0);
+    this.blades.length = 0;
+    for (const w of this.weapons) {
+      const kind = w.kind || 'ranged';
+      if (kind === 'orbit') this.updateOrbit(dt, w, enemies, effects);
+      else if (kind === 'melee') this.updateMelee(dt, w, enemies, effects);
+      else this.updateRanged(dt, w, enemies, projectiles);
+    }
+    this.updateProjectiles(dt, enemies, projectiles, bounds, effects);
+  }
+  // Pasar player al update para aplicar combo (llamado desde main)
+  setPlayer(player) {
+    this.player = player;
+  }
+  // --- Armas a distancia -------------------------------------------
+  updateRanged(dt, w, enemies, projectiles) {
+    w.cooldown -= dt;
+    if (w.cooldown > 0) return;
+    const target = this.nearestEnemyInRange(enemies);
+    if (!target) return; // sin objetivo: queda lista, no gasta el disparo
+    this.fire(w, target, projectiles);
+    // attackSpeed del player multiplica la cadencia de todas las armas.
+    w.cooldown = 1 / (w.fireRate * this.player.stats.attackSpeed);
+  }
+  // Tira N proyectiles en abanico (count + multishot) con crítico.
+  fire(w, target, projectiles) {
+    const st = this.player.stats;
+    const baseAng = Math.atan2(target.cy - this.player.cy, target.cx - this.player.cx);
+    const total = (w.count || 1) + (st.multishot || 0);
+    const spread = total > 1 ? (w.spread || 0.28) : 0;
+    for (let i = 0; i < total; i++) {
+      const t = total > 1 ? i / (total - 1) - 0.5 : 0; // -0.5..0.5
+      const ang = baseAng + t * spread;
+      const p = new Projectile(
+        this.player.cx, this.player.cy,
+        Math.cos(ang), Math.sin(ang), w
+      );
+      const c = this.rollCrit(p.damage);
+      p.damage = c.value;
+      p.crit = c.crit;
+      projectiles.push(p);
+    }
+  }
+  // --- Cuchillas orbitales (cuerpo a cuerpo defensivo) -------------
+  updateOrbit(dt, w, enemies, effects) {
+    w.angle = (w.angle || 0) + w.orbitSpeed * dt;
+    const n = (w.count || 1) + (this.player.stats.multishot || 0);
+    // Cooldown por enemigo: una cuchilla no borra toda la vida en un
+    // solo frame; cada enemigo solo puede ser golpeado cada hitInterval.
+    const cds = w.hitCooldowns || (w.hitCooldowns = new Map());
+    for (const [e, t] of cds) {
+      const nt = t - dt;
+      if (nt <= 0 || e.isDead) cds.delete(e);
+      else cds.set(e, nt);
+    }
+    for (let i = 0; i < n; i++) {
+      const a = w.angle + i * ((Math.PI * 2) / n);
+      const bx = this.player.cx + Math.cos(a) * w.orbitRadius;
+      const by = this.player.cy + Math.sin(a) * w.orbitRadius;
+      this.blades.push({ x: bx, y: by, color: w.color });
+      for (const e of enemies) {
+        if (e.isDead || cds.has(e)) continue;
+        const reach = BLADE_RADIUS + e.w / 2;
+        const dx = e.cx - bx;
+        const dy = e.cy - by;
+        if (dx * dx + dy * dy <= reach * reach) {
+          const c = this.rollCrit(w.damage);
+          e.takeDamage(c.value);
+          cds.set(e, w.hitInterval);
+          if (effects) {
+            effects.popText(e.cx, e.cy - 6, c.value, c.crit ? '#ffffff' : w.color);
+            effects.burst(bx, by, w.color, 3);
+          }
+        }
+      }
+    }
+  }
+  // --- Sable (cuerpo a cuerpo ofensivo) ----------------------------
+  updateMelee(dt, w, enemies, effects) {
+    w.cooldown -= dt;
+    if (w.cooldown > 0) return;
+    // Apunta al enemigo más cercano; si no hay, hacia donde mira.
+    const target = this.nearestEnemyInRange(enemies) || this.nearest(enemies);
+    const ang = target
+      ? Math.atan2(target.cy - this.player.cy, target.cx - this.player.cx)
+      : Math.atan2(this.player.facingY, this.player.facingX);
+    // Registrar el barrido para dibujarlo (se desvanece solo).
+    this.swings.push({
+      cx: this.player.cx, cy: this.player.cy,
+      ang, reach: w.reach, arc: w.arc, color: w.color,
+      life: 0.15, maxLife: 0.15,
+    });
+    // Daño a todos los enemigos dentro del arco y el alcance.
+    const reachSq = w.reach ** 2;
+    for (const e of enemies) {
+      if (e.isDead) continue;
+      const dx = e.cx - this.player.cx;
+      const dy = e.cy - this.player.cy;
+      if (dx * dx + dy * dy > reachSq) continue;
+      // Diferencia angular normalizada a -PI..PI
+      let da = Math.atan2(dy, dx) - ang;
+      da = Math.atan2(Math.sin(da), Math.cos(da));
+      if (Math.abs(da) <= w.arc / 2) {
+        const c = this.rollCrit(w.damage);
+        e.takeDamage(c.value);
+        if (effects) {
+          effects.popText(e.cx, e.cy - 6, c.value, c.crit ? '#ffffff' : w.color);
+          effects.burst(e.cx, e.cy, w.color, 4);
+        }
+      }
+    }
+    w.cooldown = 1 / (w.fireRate * this.player.stats.attackSpeed);
+  }
+  nearestEnemyInRange(enemies) {
+    // Distancia al cuadrado: evita sqrt en un loop que corre por frame
+    const rangeSq = this.player.stats.range ** 2;
+    return this.nearest(enemies, rangeSq);
+  }
+  // Enemigo vivo más cercano (opcionalmente dentro de maxSq).
+  nearest(enemies, maxSq = Infinity) {
+    let best = null;
+    let bestSq = Infinity;
+    for (const e of enemies) {
+      if (e.isDead) continue;
+      const dx = e.cx - this.player.cx;
+      const dy = e.cy - this.player.cy;
+      const dSq = dx * dx + dy * dy;
+      if (dSq <= maxSq && dSq < bestSq) {
+        bestSq = dSq;
+        best = e;
+      }
+    }
+    return best;
+  }
+  updateProjectiles(dt, enemies, projectiles, bounds, effects) {
+    for (const p of projectiles) {
+      p.update(dt, bounds);
+      if (p.dead) continue;
+      for (const e of enemies) {
+        if (e.isDead || p.hit.has(e) || !aabb(p, e)) continue;
+        // Combo multiplicador: +5% daño por combo (cap x2.0)
+        const comboMult = 1 + Math.min(1, (this.player.combo || 0) * 0.05);
+        const finalDamage = Math.round(p.damage * comboMult);
+        e.takeDamage(finalDamage);
+        p.hit.add(e);
+        // Sumar combo al impactar
+        if (this.player) {
+          this.player.combo = (this.player.combo || 0) + 1;
+          this.player.comboTimer = 1; // 1 segundo antes de resetear
+        }
+        if (effects) {
+          // Los críticos se ven en blanco y con más chispas
+          effects.popText(e.cx, e.cy - 6, finalDamage, p.crit ? '#ffffff' : p.color);
+          effects.burst(p.cx, p.cy, p.color, p.crit ? 8 : 4);
+        }
+        // Daño en área (misil): golpea a todos alrededor y muere.
+        if (p.splash > 0) {
+          this.explode(p, enemies, effects);
+          p.dead = true;
+          break;
+        }
+        if (p.pierce) continue;
+        // Electric chain: en vez de morir, rebota hacia el siguiente
+        // enemigo vivo más cercano que aún no haya golpeado.
+        if (p.chainLeft > 0) {
+          const next = this.nearestChainTarget(p, enemies, e);
+          if (next) {
+            const dx = next.cx - p.cx;
+            const dy = next.cy - p.cy;
+            const len = Math.hypot(dx, dy) || 1;
+            p.dirX = dx / len;
+            p.dirY = dy / len;
+            p.chainLeft--;
+            p.damage = Math.max(1, Math.round(p.damage * CHAIN_DECAY));
+            break;
+          }
+        }
+        p.dead = true;
+        break;
+      }
+    }
+  }
+  // Explosión en área: daña a todos los enemigos dentro del radio de
+  // splash que aún no recibieron el impacto directo.
+  explode(p, enemies, effects) {
+    const rSq = p.splash ** 2;
+    for (const e of enemies) {
+      if (e.isDead || p.hit.has(e)) continue;
+      const dx = e.cx - p.cx;
+      const dy = e.cy - p.cy;
+      if (dx * dx + dy * dy <= rSq) {
+        e.takeDamage(p.damage);
+        p.hit.add(e);
+        if (effects) effects.popText(e.cx, e.cy - 6, p.damage, p.color);
+      }
+    }
+    if (effects) effects.burst(p.cx, p.cy, p.color, 16); // estallido grande
+  }
+  nearestChainTarget(p, enemies, from) {
+    const rangeSq = CHAIN_RANGE ** 2;
+    let best = null;
+    let bestSq = Infinity;
+    for (const e of enemies) {
+      if (e.isDead || p.hit.has(e)) continue;
+      const dx = e.cx - from.cx;
+      const dy = e.cy - from.cy;
+      const dSq = dx * dx + dy * dy;
+      if (dSq <= rangeSq && dSq < bestSq) {
+        bestSq = dSq;
+        best = e;
+      }
+    }
+    return best;
+  }
+  // Dibuja cuchillas orbitales y barridos de melee (lo llama main
+  // dentro del bloque de screen shake, junto al resto del mundo).
+  render(r) {
+    for (const b of this.blades) {
+      r.rect(b.x - 5, b.y - 5, 10, 10, b.color);
+      r.rect(b.x - 2, b.y - 2, 4, 4, '#ffffff'); // brillo central
+    }
+    for (const s of this.swings) {
+      const steps = 7;
+      for (let i = 0; i <= steps; i++) {
+        const a = s.ang - s.arc / 2 + s.arc * (i / steps);
+        const x = s.cx + Math.cos(a) * s.reach;
+        const y = s.cy + Math.sin(a) * s.reach;
+        r.rect(x - 3, y - 3, 6, 6, s.color);
+      }
+    }
+  }
+}
+
+
+// ============================================
+// systems/xpSystem.js
+// ============================================
+// XpSystem: orbes de experiencia y niveles. Los enemigos sueltan un
+// orbe al morir; el orbe vuela hacia el player cuando se acerca
+// (efecto imán) y al recogerlo suma XP. Los level-ups se ENCOLAN en
+// pendingLevels: main.js abre una pantalla de mejora por cada uno.
+;
+const ORB_SIZE = 6;
+const MAGNET_RADIUS = 60;  // px a los que el orbe empieza a volar hacia ti
+const MAGNET_SPEED = 260;  // px/s del vuelo del orbe
+const SCATTER = 8;         // dispersión al soltar (kills apilados no se solapan)
+// Curva de nivel: primeros niveles rápidos (hook), después se estira.
+// Reducido para que barra suba más notoriamente
+const BASE_XP = 4;        // primeros 4 XP para llegar a nivel 2
+const XP_PER_LEVEL = 3;   // después +3 cada nivel
+class XpOrb {
+  constructor(cx, cy, value) {
+    this.w = ORB_SIZE;
+    this.h = ORB_SIZE;
+    this.x = cx - ORB_SIZE / 2 + (Math.random() * 2 - 1) * SCATTER;
+    this.y = cy - ORB_SIZE / 2 + (Math.random() * 2 - 1) * SCATTER;
+    this.value = value;
+    this.dead = false;
+  }
+  get cx() { return this.x + this.w / 2; }
+  get cy() { return this.y + this.h / 2; }
+}
+class XpSystem {
+  constructor(player) {
+    this.player = player;
+    this.orbs = [];
+    this.level = 1;
+    this.xp = 0;
+    this.pendingLevels = 0;
+  }
+  get xpToNext() {
+    return BASE_XP + (this.level - 1) * XP_PER_LEVEL;
+  }
+  spawnOrb(cx, cy, value) {
+    this.orbs.push(new XpOrb(cx, cy, value));
+  }
+  update(dt) {
+    const p = this.player;
+    // Radio de imán desde los stats del player (power-up "imán de XP").
+    const magnetSq = (p.stats.magnet || MAGNET_RADIUS) ** 2;
+    for (const o of this.orbs) {
+      const dx = p.cx - o.cx;
+      const dy = p.cy - o.cy;
+      const dSq = dx * dx + dy * dy;
+      if (dSq < magnetSq) {
+        const len = Math.sqrt(dSq) || 1;
+        o.x += (dx / len) * MAGNET_SPEED * dt;
+        o.y += (dy / len) * MAGNET_SPEED * dt;
+      }
+      if (aabb(o, p)) {
+        o.dead = true;
+        this.gain(o.value * (p.stats.xpMult || 1)); // power-up "XP +%"
+      }
+    }
+    removeWhere(this.orbs, (o) => o.dead);
+  }
+  gain(amount) {
+    this.xp += amount;
+    while (this.xp >= this.xpToNext) {
+      this.xp -= this.xpToNext;
+      this.level++;
+      this.pendingLevels++;
+    }
+  }
+  render(r) {
+    for (const o of this.orbs) {
+      r.rect(o.x, o.y, o.w, o.h, '#ffe44f');
+      r.rect(o.x + 2, o.y + 2, 2, 2, '#fff7c2'); // brillo interior
+    }
+  }
+}
+
+
+// ============================================
+// systems/upgrades.js
+// ============================================
+// UpgradeSystem: el pool de mejoras (los 4 tipos de la spec) y la
+// lógica de "ofrecer 3, aplicar 1". Las mejoras son datos + closure
+// apply(); añadir una nueva es agregar una entrada al pool.
+;
+class UpgradeSystem {
+  constructor(player, combat) {
+    this.player = player;
+    this.combat = combat;
+  }
+  // El pool se reconstruye en cada level-up porque depende del estado:
+  // new_weapon solo se ofrece si queda un arma sin equipar.
+  buildPool() {
+    const pool = [
+      {
+        id: 'increase_damage',
+        title: 'Más daño',
+        lines: ['+20% de daño en', 'todas las armas'],
+        apply: () => {
+          for (const w of this.combat.weapons) {
+            w.damage = Math.round(w.damage * 1.2);
+          }
+        },
+      },
+      {
+        id: 'increase_speed',
+        title: 'Más velocidad',
+        lines: ['+15% velocidad', 'de movimiento'],
+        apply: () => {
+          this.player.stats.speed *= 1.15;
+        },
+      },
+      {
+        id: 'upgrade_weapon',
+        title: 'Mejorar arma',
+        lines: ['+25% daño y +10%', 'cadencia a un arma'],
+        apply: () => {
+          const ws = this.combat.weapons;
+          const w = ws[Math.floor(Math.random() * ws.length)];
+          w.damage = Math.round(w.damage * 1.25);
+          w.fireRate *= 1.1;
+        },
+      },
+      {
+        id: 'attack_speed',
+        title: 'Cadencia rápida',
+        lines: ['+15% cadencia de', 'todas las armas'],
+        apply: () => { this.player.stats.attackSpeed *= 1.15; },
+      },
+      {
+        id: 'max_hp',
+        title: 'Vida máxima +25',
+        lines: ['+25 de vida máxima', 'y te cura 25'],
+        apply: () => {
+          this.player.stats.hp += 25;
+          this.player.hp = Math.min(this.player.stats.hp, this.player.hp + 25);
+        },
+      },
+      {
+        id: 'regen',
+        title: 'Regeneración',
+        lines: ['+1 de vida por', 'segundo'],
+        apply: () => { this.player.stats.regen += 1; },
+      },
+      {
+        id: 'shield',
+        title: 'Escudo +1',
+        lines: ['+1 carga de escudo', 'que absorbe un golpe'],
+        apply: () => {
+          this.player.stats.shieldMax += 1;
+          this.player.shield += 1; // una carga lista de inmediato
+        },
+      },
+      {
+        id: 'magnet',
+        title: 'Imán de XP',
+        lines: ['+40% de radio de', 'recogida de orbes'],
+        apply: () => { this.player.stats.magnet *= 1.4; },
+      },
+      {
+        id: 'range_up',
+        title: 'Más alcance',
+        lines: ['+20% de alcance', 'de las armas'],
+        apply: () => { this.player.stats.range *= 1.2; },
+      },
+      {
+        id: 'multishot',
+        title: 'Proyectil extra',
+        lines: ['+1 proyectil en', 'cada disparo'],
+        apply: () => { this.player.stats.multishot += 1; },
+      },
+      {
+        id: 'crit',
+        title: 'Golpe crítico',
+        lines: ['+10% de prob. de', 'crítico (x2 daño)'],
+        apply: () => {
+          this.player.stats.crit = Math.min(0.6, this.player.stats.crit + 0.1);
+        },
+      },
+      {
+        id: 'xp_up',
+        title: 'XP acelerada',
+        lines: ['+20% de XP', 'por orbe'],
+        apply: () => { this.player.stats.xpMult *= 1.2; },
+      },
+      {
+        id: 'dash_speed',
+        title: 'Dash Turbocargado',
+        lines: ['+30% velocidad', 'durante el dash'],
+        apply: () => { this.player.dashSpeed *= 1.3; },
+      },
+      {
+        id: 'dash_cooldown',
+        title: 'Dash Frecuente',
+        lines: ['-25% de tiempo de', 'recarga del dash'],
+        apply: () => { this.player.dashMaxCooldown *= 0.75; },
+      },
+      {
+        id: 'dash_duration',
+        title: 'Dash Prolongado',
+        lines: ['+40% duración del', 'dash defensivo'],
+        apply: () => { this.player.dashMaxDuration *= 1.4; },
+      },
+    ];
+    const free = this.combat.unequippedKeys;
+    if (free.length > 0) {
+      const key = free[0];
+      pool.push({
+        id: 'new_weapon',
+        title: `Nueva arma: ${WEAPONS[key].name}`,
+        lines: ['Equipa un arma', 'adicional'],
+        apply: () => this.combat.equip(key),
+      });
+    }
+    return pool;
+  }
+  rollChoices(n = 3) {
+    const pool = this.buildPool();
+    // Fisher-Yates: barajado uniforme sin sesgos
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, n);
+  }
+  apply(choice) {
+    choice.apply();
+  }
+}
+
+
+// ============================================
+// systems/scenarios.js
+// ============================================
+// ScenarioSystem: biomas + sus efectos especiales jugables. Define el
+// MUNDO (mucho mayor que la pantalla: la cámara sigue al player) y su
+// estrellado, bordes, rocas y muros. Cada bioma tiene un specialEffect:
+// tormentas, baja gravedad, rocas a la deriva o arena cerrada.
+;
+;
+// Tamaño del mundo grande (varios pantallazos). La estación es cerrada
+// y más pequeña.
+const BIG_W = 2600;
+const BIG_H = 1800;
+const BIOMES = {
+  mars: {
+    name: 'Marte',
+    enemyMultiplier: 1.0,  // bajado de 1.2 (balance: curva de dificultad suave)
+    specialEffect: 'dust_storm',
+    sky: '#0a0a12',
+    edge: '#ff4f30',
+    world: { w: BIG_W, h: BIG_H },
+    playerSpeedMult: 1,
+    lines: ['Spawn moderado y tormentas', 'de polvo que te frenan'],
+  },
+  luna: {
+    name: 'Luna',
+    enemyMultiplier: 0.9,
+    specialEffect: 'low_gravity',
+    sky: '#0b0e14',
+    edge: '#aab4c8',
+    world: { w: BIG_W, h: BIG_H },
+    playerSpeedMult: 1.25,
+    lines: ['Baja gravedad: te mueves', '25% mas rapido'],
+  },
+  asteroids: {
+    name: 'Asteroides',
+    enemyMultiplier: 1.0,
+    specialEffect: 'obstacles',
+    sky: '#070a10',
+    edge: '#7df9ff',
+    world: { w: BIG_W, h: BIG_H },
+    playerSpeedMult: 1,
+    lines: ['Rocas a la deriva bloquean', 'tu paso y tus disparos'],
+  },
+  station: {
+    name: 'Estacion espacial',
+    enemyMultiplier: 1.1,
+    specialEffect: 'closed_map',
+    sky: '#0c1018',
+    edge: '#39ff14',
+    world: { w: 1400, h: 1000 }, // arena cerrada, más chica
+    playerSpeedMult: 1,
+    lines: ['Arena cerrada y compacta:', 'sin escapatoria'],
+  },
+};
+const BIOME_KEYS = Object.keys(BIOMES);
+const STORM_CALM = 15;
+const STORM_DURATION = 5;
+const STORM_SLOW = 0.8;
+const STAR_DENSITY = 1 / 9000; // estrellas por px² de mundo
+const ROCK_DENSITY = 1 / 90000; // rocas por px² (bioma asteroides)
+const SAFE_RADIUS = 220;        // nada nace sobre el spawn del player (centro)
+class ScenarioSystem {
+  constructor(key) {
+    this.key = key;
+    this.biome = BIOMES[key];
+    this.world = { ...this.biome.world };
+    // El área jugable es todo el mundo (player y enemigos se mueven por él).
+    this.bounds = { x: 0, y: 0, w: this.world.w, h: this.world.h };
+    this.storming = false;
+    this.stormTimer = STORM_CALM;
+    this.stars = this.generateStars();
+    this.rocks = [];
+    if (this.biome.specialEffect === 'obstacles') this.generateRocks();
+  }
+  get closed() {
+    return this.biome.specialEffect === 'closed_map';
+  }
+  get playerSpeedMult() {
+    return (this.biome.playerSpeedMult || 1) * (this.storming ? STORM_SLOW : 1);
+  }
+  // Estrellas en coordenadas de MUNDO (parallax-free, simples).
+  generateStars() {
+    const n = Math.floor(this.world.w * this.world.h * STAR_DENSITY);
+    const stars = [];
+    for (let i = 0; i < n; i++) {
+      stars.push({
+        x: Math.random() * this.world.w,
+        y: Math.random() * this.world.h,
+        size: Math.random() < 0.85 ? 1 : 2,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.5 + Math.random() * 1.5,
+      });
+    }
+    return stars;
+  }
+  generateRocks() {
+    const cx = this.world.w / 2;
+    const cy = this.world.h / 2;
+    const target = Math.floor(this.world.w * this.world.h * ROCK_DENSITY);
+    let guard = 0;
+    while (this.rocks.length < target && guard++ < target * 8) {
+      const s = 30 + Math.random() * 44;
+      const rock = {
+        x: Math.random() * (this.world.w - s),
+        y: Math.random() * (this.world.h - s),
+        w: s, h: s,
+        vx: (Math.random() * 2 - 1) * 18,
+        vy: (Math.random() * 2 - 1) * 18,
+      };
+      const dx = rock.x + s / 2 - cx;
+      const dy = rock.y + s / 2 - cy;
+      if (dx * dx + dy * dy > SAFE_RADIUS ** 2) this.rocks.push(rock);
+    }
+  }
+  update(dt) {
+    if (this.biome.specialEffect === 'dust_storm') {
+      this.stormTimer -= dt;
+      if (this.stormTimer <= 0) {
+        this.storming = !this.storming;
+        this.stormTimer = this.storming ? STORM_DURATION : STORM_CALM;
+      }
+    }
+    // Rocas a la deriva: rebotan en los bordes del mundo.
+    for (const r of this.rocks) {
+      r.x += r.vx * dt;
+      r.y += r.vy * dt;
+      if (r.x < 0 || r.x > this.world.w - r.w) r.vx *= -1;
+      if (r.y < 0 || r.y > this.world.h - r.h) r.vy *= -1;
+    }
+  }
+  // Empuja a la entidad fuera de las rocas por el eje de menor solape
+  collide(ent) {
+    for (const r of this.rocks) {
+      if (!aabb(ent, r)) continue;
+      const overlapX = Math.min(ent.x + ent.w, r.x + r.w) - Math.max(ent.x, r.x);
+      const overlapY = Math.min(ent.y + ent.h, r.y + r.h) - Math.max(ent.y, r.y);
+      if (overlapX < overlapY) {
+        ent.x += ent.x + ent.w / 2 < r.x + r.w / 2 ? -overlapX : overlapX;
+      } else {
+        ent.y += ent.y + ent.h / 2 < r.y + r.h / 2 ? -overlapY : overlapY;
+      }
+    }
+  }
+  blocksProjectile(p) {
+    for (const r of this.rocks) {
+      if (aabb(p, r)) return true;
+    }
+    return false;
+  }
+  // Dibuja el mundo BAJO la transformación de cámara (coords de mundo).
+  // view = rect visible {x,y,w,h} para culling.
+  renderWorld(r, elapsed, view) {
+    const b = this.biome;
+    const vx0 = view.x - 4, vy0 = view.y - 4;
+    const vx1 = view.x + view.w + 4, vy1 = view.y + view.h + 4;
+    // Estrellas (solo las visibles)
+    if (!this.storming) {
+      for (const s of this.stars) {
+        if (s.x < vx0 || s.x > vx1 || s.y < vy0 || s.y > vy1) continue;
+        const a = 0.4 + 0.6 * Math.abs(Math.sin(elapsed * s.speed + s.phase));
+        r.rect(s.x, s.y, s.size, s.size, `rgba(255,255,255,${a.toFixed(2)})`);
+      }
+    }
+    // Rocas visibles
+    for (const rock of this.rocks) {
+      if (rock.x + rock.w < vx0 || rock.x > vx1 || rock.y + rock.h < vy0 || rock.y > vy1) continue;
+      r.rect(rock.x, rock.y, rock.w, rock.h, '#2a3142');
+      r.rect(rock.x, rock.y, rock.w, 2, '#454f68');
+    }
+    // Borde del mundo (neón): el jugador ve los límites del escenario.
+    const t = 4;
+    r.rect(0, 0, this.world.w, t, b.edge);
+    r.rect(0, this.world.h - t, this.world.w, t, b.edge);
+    r.rect(0, 0, t, this.world.h, b.edge);
+    r.rect(this.world.w - t, 0, t, this.world.h, b.edge);
+  }
+  renderForeground(r) {
+    if (this.storming) {
+      r.rect(0, 0, VIEW_W, VIEW_H, 'rgba(255, 99, 48, 0.18)');
+    }
+  }
+}
+
+
+// ============================================
+// systems/effects.js
+// ============================================
+// Effects: feedback visual transitorio (game feel). Agrupa tres cosas
+// cohesionadas porque todas son "juice" de vida corta: partículas,
+// números de daño flotantes y screen shake. Nada de esto afecta la
+// simulación; si se quita, el juego sigue funcionando igual.
+;
+// '#rrggbb' -> 'rgba(r,g,b,a)'. Permite desvanecer partículas/textos
+// reutilizando los colores hex del juego.
+function fade(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a.toFixed(2)})`;
+}
+class Effects {
+  constructor() {
+    this.particles = [];
+    this.texts = [];
+    this.shakeT = 0;    // tiempo restante de sacudida
+    this.shakeDur = 0;  // duración total (para atenuar al final)
+    this.shakeMag = 0;  // amplitud en px
+  }
+  // Estallido de chispas en (cx,cy): muerte de enemigo, impactos...
+  burst(cx, cy, color, n = 8) {
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 40 + Math.random() * 130;
+      const life = 0.35 + Math.random() * 0.35;
+      this.particles.push({
+        x: cx, y: cy,
+        vx: Math.cos(ang) * sp,
+        vy: Math.sin(ang) * sp,
+        life, max: life,
+        size: 2 + Math.random() * 2,
+        color,
+      });
+    }
+  }
+  // Número de daño que sube y se desvanece.
+  popText(cx, cy, str, color = '#ffe44f') {
+    this.texts.push({ x: cx, y: cy, str: String(str), color, life: 0.6, max: 0.6 });
+  }
+  // Sacudida de pantalla; toma el máximo si ya había una activa.
+  shake(mag = 6, time = 0.25) {
+    if (mag >= this.shakeMag || this.shakeT <= 0) {
+      this.shakeMag = mag;
+      this.shakeT = time;
+      this.shakeDur = time;
+    }
+  }
+  update(dt) {
+    for (const p of this.particles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.9; // fricción: se frenan al expandirse
+      p.vy *= 0.9;
+      p.life -= dt;
+    }
+    for (const t of this.texts) {
+      t.y -= 34 * dt; // flotan hacia arriba
+      t.life -= dt;
+    }
+    removeWhere(this.particles, (p) => p.life <= 0);
+    removeWhere(this.texts, (t) => t.life <= 0);
+    if (this.shakeT > 0) this.shakeT -= dt;
+  }
+  // Desplazamiento de cámara para el frame actual (0 si no hay shake).
+  // Atenúa hacia el final para que la sacudida "se asiente".
+  get offsetX() {
+    if (this.shakeT <= 0) return 0;
+    const k = this.shakeT / (this.shakeDur || 1);
+    return (Math.random() * 2 - 1) * this.shakeMag * k;
+  }
+  get offsetY() {
+    if (this.shakeT <= 0) return 0;
+    const k = this.shakeT / (this.shakeDur || 1);
+    return (Math.random() * 2 - 1) * this.shakeMag * k;
+  }
+  render(r) {
+    for (const p of this.particles) {
+      r.rect(p.x, p.y, p.size, p.size, fade(p.color, Math.max(0, p.life / p.max)));
+    }
+    for (const t of this.texts) {
+      r.text(t.str, t.x, t.y, fade(t.color, Math.max(0, t.life / t.max)), 12);
+    }
+  }
+}
+
+
+// ============================================
+// systems/devConsole.js
+// ============================================
+// DevConsole: panel de control en tiempo real para tweakear parámetros del juego
+// Abre con backtick (~) o F12. Exporta/importa JSON para compartir configuraciones.
+class DevConsole {
+  constructor() {
+    this.visible = false;
+    this.params = {};
+    this.defaultParams = {
+      'Player Speed': { value: 3.2, min: 1, max: 8, step: 0.1, key: 'playerSpeed' },
+      'Dash Cooldown': { value: 1.5, min: 0.5, max: 5, step: 0.1, key: 'dashCooldown' },
+      'Dash Duration': { value: 0.3, min: 0.1, max: 1, step: 0.05, key: 'dashDuration' },
+      'Dash Speed': { value: 8, min: 3, max: 15, step: 0.5, key: 'dashSpeed' },
+      'Combo Multiplier': { value: 0.05, min: 0, max: 0.2, step: 0.01, key: 'comboMult' },
+      'Enemy Spawn Rate': { value: 1, min: 0.3, max: 3, step: 0.1, key: 'spawnRate' },
+      'Enemy Damage': { value: 1, min: 0.1, max: 3, step: 0.1, key: 'enemyDamage' },
+      'Enemy Speed': { value: 1, min: 0.3, max: 2.5, step: 0.1, key: 'enemySpeed' },
+    };
+    // Copiar valores por defecto
+    for (const [label, cfg] of Object.entries(this.defaultParams)) {
+      this.params[cfg.key] = cfg.value;
+    }
+  }
+  toggle() {
+    this.visible = !this.visible;
+  }
+  update(dt, input) {
+    if (input.consume('Backquote') || input.consume('F12')) {
+      this.toggle();
+    }
+  }
+  applyToGame(player, combat, spawner, enemies) {
+    // Aplicar parámetros al player
+    if (player) {
+      player.stats.speed = this.params.playerSpeed;
+      player.dashMaxCooldown = this.params.dashCooldown;
+      player.dashMaxDuration = this.params.dashDuration;
+      player.dashSpeed = this.params.dashSpeed;
+    }
+    // Aplicar a enemigos activos
+    for (const e of enemies) {
+      e.speed = (e.type === 'boss' || e.type === 'boss_elite' ? 0.5 : e.speed || 1.2) * this.params.enemySpeed;
+      e.damage = (e.damage || 1) * this.params.enemyDamage;
+    }
+    // Spawner rate (ajusta cooldown de spawn)
+    if (spawner) {
+      spawner.spawnCooldown = Math.max(0.1, 2 / this.params.spawnRate);
+    }
+  }
+  render(r, VIEW_W, VIEW_H) {
+    if (!this.visible) return;
+    // Fondo oscuro semi-transparente
+    const panelW = 400;
+    const panelH = 480;
+    const panelX = VIEW_W - panelW - 10;
+    const panelY = 10;
+    r.rect(panelX, panelY, panelW, panelH, '#05050a');
+    r.rect(panelX, panelY, panelW, 2, '#7df9ff'); // borde superior
+    r.rect(panelX, panelY, 2, panelH, '#7df9ff'); // borde izquierdo
+    r.rect(panelX + panelW - 2, panelY, 2, panelH, '#7df9ff'); // borde derecho
+    r.rect(panelX, panelY + panelH - 2, panelW, 2, '#7df9ff'); // borde inferior
+    // Título
+    r.text('DEV CONSOLE', panelX + 10, panelY + 20, '#7df9ff', 14);
+    r.text('` o F12 para cerrar', panelX + 10, panelY + 35, '#999', 10);
+    // Parámetros
+    let y = panelY + 55;
+    const lineH = 35;
+    let idx = 0;
+    for (const [label, cfg] of Object.entries(this.defaultParams)) {
+      if (idx >= 12) break; // Máximo 12 parámetros visibles
+      const value = this.params[cfg.key];
+      const pct = (value - cfg.min) / (cfg.max - cfg.min);
+      // Label
+      r.text(label, panelX + 10, y, '#ffe44f', 10);
+      // Barra de slider
+      const barW = panelW - 30;
+      const barX = panelX + 10;
+      const barY = y + 12;
+      r.rect(barX, barY, barW, 6, '#1c2030');
+      r.rect(barX, barY, barW * pct, 6, '#39ff14');
+      // Valor
+      r.text(value.toFixed(2), panelX + panelW - 50, y, '#7df9ff', 10);
+      y += lineH;
+      idx++;
+    }
+    // Botones: Export / Import / Reset
+    const btnY = panelY + panelH - 50;
+    const btnH = 16;
+    r.rect(panelX + 10, btnY, 110, btnH, '#1c2030');
+    r.text('EXPORT (X)', panelX + 15, btnY + 12, '#39ff14', 9);
+    r.rect(panelX + 130, btnY, 110, btnH, '#1c2030');
+    r.text('IMPORT (V)', panelX + 135, btnY + 12, '#7df9ff', 9);
+    r.rect(panelX + 250, btnY, 110, btnH, '#1c2030');
+    r.text('RESET (R)', panelX + 255, btnY + 12, '#ff4f30', 9);
+    // Info de mouse si está cerca
+    r.text(`Mouse: ${this.lastMouseX || 0}, ${this.lastMouseY || 0}`, panelX + 10, btnY - 20, '#666', 9);
+  }
+  // Exportar configuración como JSON
+  export() {
+    const cfg = JSON.stringify(this.params, null, 2);
+    console.log('=== CONFIGURACIÓN EXPORTADA ===');
+    console.log(cfg);
+    console.log('=== COPIA EL JSON DE ARRIBA ===');
+    return cfg;
+  }
+  // Importar configuración desde JSON
+  import(jsonStr) {
+    try {
+      const cfg = JSON.parse(jsonStr);
+      Object.assign(this.params, cfg);
+      console.log('✓ Configuración importada exitosamente');
+      return true;
+    } catch (e) {
+      console.error('✗ Error al parsear JSON:', e.message);
+      return false;
+    }
+  }
+  // Resetear a valores por defecto
+  reset() {
+    for (const [label, cfg] of Object.entries(this.defaultParams)) {
+      this.params[cfg.key] = cfg.value;
+    }
+    console.log('✓ Configuración reseteada a valores por defecto');
+  }
+}
+
+
+// ============================================
+// systems/menuSystem.js
+// ============================================
+// MenuSystem: menús interactivos con mouse
+// Menú principal (Play/Options/Quit) → Selección de bioma (1-4)
+class MenuSystem {
+  constructor() {
+    this.screen = 'main'; // 'main' | 'biome_select'
+    this.selectedBiome = 0;
+    this.selectedMainMenu = 0; // 0=Play, 1=Options, 2=Quit
+    this.hoveredMainMenu = -1;
+    this.hoveredBiome = -1;
+    this.mainMenuOptions = [
+      { label: 'JUGAR', color: '#39ff14' },
+      { label: 'OPCIONES', color: '#ffe44f' },
+      { label: 'SALIR', color: '#ff4f30' },
+    ];
+    this.biomes = [
+      { key: 'mars', label: 'Marte', desc: '(spawn agresivo)', color: '#ff3864' },
+      { key: 'luna', label: 'Luna', desc: '(baja gravedad)', color: '#7db4ff' },
+      { key: 'asteroids', label: 'Asteroides', desc: '(rocas)', color: '#ffe44f' },
+      { key: 'station', label: 'Estación', desc: '(arena cerrada)', color: '#39ff14' },
+    ];
+    this.hoveredBiome = -1;
+  }
+  update(input, mouseX, mouseY) {
+    if (this.screen === 'main') {
+      return this.updateMainMenu(input, mouseX, mouseY);
+    } else if (this.screen === 'biome_select') {
+      return this.updateBiomeSelect(input, mouseX, mouseY);
+    }
+    return null;
+  }
+  updateMainMenu(input, mouseX, mouseY) {
+    // Teclado: 1-3
+    for (let i = 0; i < 3; i++) {
+      if (input.consume(`Digit${i + 1}`)) {
+        if (i === 0) { // JUGAR
+          this.screen = 'biome_select';
+        } else if (i === 2) { // SALIR
+          return 'QUIT';
+        }
+        return null;
+      }
+    }
+    // Mouse: detectar hover y click
+    this.hoveredMainMenu = this.getHoveredMainMenu(mouseX, mouseY);
+    if (input.mouseClick && !input.mouseClickConsumed && this.hoveredMainMenu >= 0) {
+      input.mouseClickConsumed = true;
+      if (this.hoveredMainMenu === 0) { // JUGAR
+        this.screen = 'biome_select';
+      } else if (this.hoveredMainMenu === 2) { // SALIR
+        return 'QUIT';
+      }
+    }
+    return null;
+  }
+  updateBiomeSelect(input, mouseX, mouseY) {
+    // Teclado: 1-4
+    for (let i = 0; i < 4; i++) {
+      if (input.consume(`Digit${i + 1}`)) {
+        this.selectedBiome = i;
+        return this.biomes[i].key;
+      }
+    }
+    // Mouse: detectar hover y click
+    this.hoveredBiome = this.getHoveredBiome(mouseX, mouseY);
+    if (input.mouseClick && !input.mouseClickConsumed && this.hoveredBiome >= 0) {
+      input.mouseClickConsumed = true;
+      this.selectedBiome = this.hoveredBiome;
+      return this.biomes[this.hoveredBiome].key;
+    }
+    return null;
+  }
+  getHoveredMainMenu(mouseX, mouseY) {
+    const buttonW = 200;
+    const buttonH = 50;
+    const gap = 30;
+    const totalW = 3 * buttonW + 2 * gap;
+    const startX = (960 - totalW) / 2; // centrado
+    const startY = 300;
+    for (let i = 0; i < 3; i++) {
+      const x = startX + i * (buttonW + gap);
+      if (mouseX >= x && mouseX <= x + buttonW &&
+          mouseY >= startY && mouseY <= startY + buttonH) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  getHoveredBiome(mouseX, mouseY) {
+    const cardW = 920;
+    const cardH = 50;
+    const startX = 20;
+    const gap = 60;
+    for (let i = 0; i < 4; i++) {
+      const y = 200 + i * (cardH + gap);
+      if (mouseX >= startX && mouseX <= startX + cardW &&
+          mouseY >= y && mouseY <= y + cardH) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  render(r, VIEW_W, VIEW_H) {
+    // Fondo
+    r.rect(0, 0, VIEW_W, VIEW_H, 'rgba(5, 5, 10, 0.95)');
+    // Título
+    r.text('SPACE MOUNT', VIEW_W / 2 - 140, 80, '#39ff14', 32);
+    if (this.screen === 'main') {
+      this.renderMainMenu(r, VIEW_W, VIEW_H);
+    } else if (this.screen === 'biome_select') {
+      this.renderBiomeSelect(r, VIEW_W, VIEW_H);
+    }
+  }
+  renderMainMenu(r, VIEW_W, VIEW_H) {
+    r.text('Bienvenido', VIEW_W / 2 - 50, 150, '#ffe44f', 20);
+    const buttonW = 200;
+    const buttonH = 50;
+    const gap = 30;
+    const totalW = 3 * buttonW + 2 * gap;
+    const startX = (VIEW_W - totalW) / 2;
+    const startY = 300;
+    for (let i = 0; i < 3; i++) {
+      const x = startX + i * (buttonW + gap);
+      const isHovered = this.hoveredMainMenu === i;
+      const option = this.mainMenuOptions[i];
+      // Button background
+      const bgColor = isHovered ? 'rgba(50, 80, 150, 0.8)' : '#141a2e';
+      r.rect(x, startY, buttonW, buttonH, bgColor);
+      // Border
+      const borderColor = isHovered ? option.color : '#444';
+      r.rect(x, startY, buttonW, 2, borderColor);
+      // Text
+      r.text(option.label, x + 20, startY + 30, option.color, 16);
+    }
+    // Instructions
+    r.text('1-3 o click para seleccionar', VIEW_W / 2 - 140, VIEW_H - 40, '#7df9ff', 12);
+  }
+  renderBiomeSelect(r, VIEW_W, VIEW_H) {
+    r.text('Elige tu bioma (1-4 o click)', VIEW_W / 2 - 140, 130, '#ffe44f', 18);
+    // Cards de biomas
+    const cardW = 920;
+    const cardH = 50;
+    const startX = 20;
+    const gap = 60;
+    for (let i = 0; i < 4; i++) {
+      const y = 200 + i * (cardH + gap);
+      const isHovered = this.hoveredBiome === i;
+      const isSelected = this.selectedBiome === i;
+      const color = this.biomes[i].color;
+      // Card background
+      const bgColor = isHovered ? 'rgba(30, 50, 100, 0.8)' : '#141a2e';
+      r.rect(startX, y, cardW, cardH, bgColor);
+      // Borde (más brillante si está seleccionado o hovered)
+      const borderColor = isSelected ? color : (isHovered ? '#7df9ff' : '#444');
+      r.rect(startX, y, cardW, 2, borderColor);
+      // Número y label
+      r.text(`${i + 1} - ${this.biomes[i].label}`, startX + 20, y + 18, color, 16);
+      r.text(this.biomes[i].desc, startX + 300, y + 18, '#999', 14);
+      // Indicador de selección
+      if (isSelected) {
+        r.rect(startX + cardW - 30, y + 15, 10, 10, color);
+      }
+    }
+    // Instrucciones abajo
+    r.text('Click en un bioma o presiona 1-4 para empezar', VIEW_W / 2 - 200, VIEW_H - 40, '#7df9ff', 12);
+  }
+}
+
+
+// ============================================
+// systems/abilitySystem.js
+// ============================================
+// AbilitySystem: habilidades destructivas masivas con cooldown
+// Se disparan con click izquierdo (botón de mouse)
+// Cada habilidad consume toda la barra y vuelve a cargar
+const ABILITIES = {
+  pulso_radiacion: {
+    name: 'Pulso de Radiación',
+    cooldown: 5,
+    damage: 50,
+    radius: 180,
+    color: '#ff00ff',
+    description: 'Explosión en área que daña todos',
+  },
+  rayo_laser: {
+    name: 'Rayo Láser',
+    cooldown: 6,
+    damage: 80,
+    radius: 0, // línea recta
+    color: '#00ffff',
+    description: 'Dispara rayo destructivo adelante',
+  },
+  agujero_negro: {
+    name: 'Agujero Negro',
+    cooldown: 7,
+    damage: 60,
+    radius: 200,
+    pull: true, // atrae enemigos
+    color: '#000000',
+    description: 'Atrae y daña enemigos cercanos',
+  },
+  escudo_temporal: {
+    name: 'Escudo Temporal',
+    cooldown: 4,
+    duration: 2,
+    color: '#00ff88',
+    description: 'Invulnerabilidad por 2 segundos',
+  },
+  explosion_nuclear: {
+    name: 'Explosión Nuclear',
+    cooldown: 8,
+    damage: 120,
+    radius: 250,
+    color: '#ffaa00',
+    description: 'Destruye todo en área masiva',
+  },
+  tormenta_plasma: {
+    name: 'Tormenta Plasma',
+    cooldown: 7,
+    damage: 40,
+    duration: 3,
+    radius: 150,
+    color: '#ff44ff',
+    description: 'Área de daño que persiste 3s',
+  },
+};
+class AbilitySystem {
+  constructor(player) {
+    this.player = player;
+    this.currentAbility = null;
+    this.abilityIndex = 0;
+    this.cooldown = 0;
+    this.maxCooldown = 5; // cooldown inicial
+    this.activeAreas = []; // áreas de daño persistentes
+  }
+  // Cambiar habilidad con números (1-6)
+  selectAbility(index) {
+    const keys = Object.keys(ABILITIES);
+    if (index >= 0 && index < keys.length) {
+      this.abilityIndex = index;
+      this.currentAbility = ABILITIES[keys[index]];
+      this.maxCooldown = this.currentAbility.cooldown;
+      return this.currentAbility.name;
+    }
+  }
+  // Triggear habilidad con click izquierdo
+  activate(enemies, effects) {
+    if (this.cooldown > 0) return false;
+    const ability = this.currentAbility;
+    if (!ability) return false;
+    const player = this.player;
+    const cx = player.cx;
+    const cy = player.cy;
+    // Escudo temporal: invulnerabilidad
+    if (ability.name === 'Escudo Temporal') {
+      player.invulnTimer = ability.duration;
+      if (effects) {
+        effects.burst(cx, cy, ability.color, 12);
+      }
+    }
+    // Tormenta Plasma: área persistente de daño
+    else if (ability.name === 'Tormenta Plasma') {
+      this.activeAreas.push({
+        cx, cy,
+        radius: ability.radius,
+        damage: ability.damage,
+        duration: ability.duration,
+        maxDuration: ability.duration,
+        color: ability.color,
+      });
+      if (effects) {
+        effects.burst(cx, cy, ability.color, 16);
+      }
+    }
+    // Agujero Negro: atrae y daña
+    else if (ability.name === 'Agujero Negro') {
+      for (const e of enemies) {
+        if (e.isDead) continue;
+        const dx = cx - e.cx;
+        const dy = cy - e.cy;
+        const dist = Math.hypot(dx, dy) || 1;
+        // Atraer
+        if (dist < ability.radius) {
+          const pull = 200; // velocidad de atracción en px/s
+          e.x += (dx / dist) * pull * 0.016;
+          e.y += (dy / dist) * pull * 0.016;
+          e.takeDamage(ability.damage / 20); // daño gradual
+        }
+      }
+      if (effects) {
+        effects.burst(cx, cy, ability.color, 20);
+      }
+    }
+    // Rayo Láser: línea recta
+    else if (ability.name === 'Rayo Láser') {
+      const dirX = player.facingX;
+      const dirY = player.facingY;
+      const rayLength = 400;
+      for (const e of enemies) {
+        if (e.isDead) continue;
+        const dx = e.cx - cx;
+        const dy = e.cy - cy;
+        const dotProduct = (dx * dirX + dy * dirY);
+        // Está en el rayo si dot > 0 y distancia perpendicular es pequeña
+        if (dotProduct > 0 && dotProduct < rayLength) {
+          const perpDist = Math.abs(-dy * dirX + dx * dirY);
+          if (perpDist < 30) {
+            e.takeDamage(ability.damage);
+          }
+        }
+      }
+      if (effects) {
+        // Dibujar línea del rayo
+        for (let i = 0; i < rayLength; i += 20) {
+          effects.burst(cx + dirX * i, cy + dirY * i, ability.color, 1);
+        }
+      }
+    }
+    // Resto: explosión en área
+    else {
+      const radiusSq = ability.radius ** 2;
+      for (const e of enemies) {
+        if (e.isDead) continue;
+        const dx = e.cx - cx;
+        const dy = e.cy - cy;
+        if (dx * dx + dy * dy <= radiusSq) {
+          e.takeDamage(ability.damage);
+        }
+      }
+      if (effects) {
+        effects.burst(cx, cy, ability.color, 24);
+      }
+    }
+    // Iniciar cooldown
+    this.cooldown = this.maxCooldown;
+    return true;
+  }
+  update(dt, input) {
+    if (this.cooldown > 0) this.cooldown -= dt;
+    // Actualizar áreas persistentes
+    for (const area of this.activeAreas) {
+      area.duration -= dt;
+    }
+    this.activeAreas = this.activeAreas.filter(a => a.duration > 0);
+  }
+  render(r, VIEW_W, VIEW_H) {
+    const ability = this.currentAbility;
+    if (!ability) return;
+    // Barra de cooldown del ability (lado derecho, debajo del dash)
+    const barW = 120;
+    const barX = VIEW_W - barW - 10;
+    const barY = 70; // debajo del dash bar
+    const cooldownPct = 1 - (this.cooldown / this.maxCooldown);
+    r.rect(barX, barY, barW, 8, '#1c2030');
+    r.rect(barX, barY, barW * cooldownPct, 8, cooldownPct >= 1 ? ability.color : '#666');
+    r.text('ABILITY', barX, barY + 18, cooldownPct >= 1 ? ability.color : '#666', 9);
+    // Nombre de la ability en el HUD
+    r.text(`[${this.abilityIndex + 1}] ${ability.name}`, 10, VIEW_H - 30, ability.color, 11);
+    r.text('Click izq para activar (1-6 para cambiar)', 10, VIEW_H - 15, '#888', 9);
+  }
+  // Debug: listar abilities
+  listAbilities() {
+    return Object.values(ABILITIES).map(a => a.name);
+  }
+}
+
+})();
+
+// main.js: punto de entrada. Ensambla engine + entidades + sistemas,
+// maneja la máquina de estados (menu → playing ⇄ levelup → muerte),
+// y dibuja el HUD. La lógica de gameplay vive en entities/ y systems/.
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+;
+const canvas = document.getElementById('game');
+const renderer = new Renderer(canvas);
+const input = new Input();
+const session = { kills: 0 };
+// Tracking de mouse para el menú
+let mouseX = 0, mouseY = 0;
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+  mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+});
+canvas.addEventListener('click', () => {
+  input.mouseClick = true;
+});
+// Limpiar flag de click al final del frame
+const originalEndFrame = input.endFrame.bind(input);
+input.endFrame = function() {
+  originalEndFrame();
+  this.mouseClick = false;
+};
+// Todo el estado de partida se recrea en newGame(): reiniciar con R
+// no recarga la página.
+let player, enemies, projectiles, enemyShots;
+let spawner, combat, xpSystem, upgrades, scenario, effects;
+let devConsole, menuSystem, abilitySystem;
+menuSystem = new MenuSystem();
+let state = 'main_menu';    // 'main_menu' | 'menu' | 'playing' | 'levelup'
+let choices;  // las 3 mejoras ofrecidas durante 'levelup'
+let survivalTime;
+let selectedBiome = 'mars'; // bioma seleccionado en el menú
+function newGame() {
+  scenario = new ScenarioSystem(selectedBiome);
+  player = new Player(scenario.bounds.x + scenario.bounds.w / 2, scenario.bounds.y + scenario.bounds.h / 2);
+  enemies = [];
+  projectiles = [];
+  enemyShots = [];
+  spawner = new SpawnSystem(scenario.biome);
+  combat = new CombatSystem(player);
+  xpSystem = new XpSystem(player);
+  upgrades = new UpgradeSystem(player, combat);
+  effects = new Effects();
+  devConsole = new DevConsole();
+  abilitySystem = new AbilitySystem(player);
+  abilitySystem.selectAbility(0); // habilidad inicial: Pulso de Radiación
+  session.kills = 0;
+  survivalTime = 0;
+  state = 'playing';
+  choices = null;
+}
+// Dummy mínimo para el menú (antes del primer newGame): nunca se
+// renderiza (render() sale temprano en 'menu'), solo evita errores si
+// algo lee scenario.
+scenario = { biome: { name: 'Cargando...', sky: '#0a0a12' }, world: { w: VIEW_W, h: VIEW_H } };
+let elapsed = 0;
+// --- Cámara ------------------------------------------------------
+// La vista sigue al player y se clampa al mundo. Devuelve el rect
+// visible {x,y,w,h} en coordenadas de mundo (para culling y spawn).
+function getView() {
+  const wld = scenario.world;
+  let camX = player.cx - VIEW_W / 2;
+  let camY = player.cy - VIEW_H / 2;
+  camX = Math.max(0, Math.min(camX, Math.max(0, wld.w - VIEW_W)));
+  camY = Math.max(0, Math.min(camY, Math.max(0, wld.h - VIEW_H)));
+  return { x: camX, y: camY, w: VIEW_W, h: VIEW_H };
+}
+// ¿La caja de la entidad toca la vista (+margen)? Para no dibujar lo
+// que está fuera de cámara (rendimiento en mundo grande).
+function inView(e, view, m = 48) {
+  return (
+    e.x + e.w >= view.x - m && e.x <= view.x + view.w + m &&
+    e.y + e.h >= view.y - m && e.y <= view.y + view.h + m
+  );
+}
+// La función que ve el GameLoop: corre la lógica del frame y SIEMPRE
+// limpia los flancos de input al final, sin importar por qué rama de
+// tick() se salió.
+function update(dt) {
+  tick(dt);
+  input.endFrame();
+}
+function tick(dt) {
+  elapsed += dt;
+  if (state === 'main_menu') {
+    const result = menuSystem.update(input, mouseX, mouseY);
+    if (result === 'QUIT') {
+      // Salir (no hacemos nada, solo queda en el menú)
+      return;
+    } else if (result && result !== 'QUIT') {
+      // Resultado es un bioma key, cambiar a estado menu
+      selectedBiome = result;
+      newGame();
+      return;
+    }
+    return;
+  }
+  if (state === 'menu') {
+    updateMenu();
+    return;
+  }
+  if (player.isDead) {
+    if (input.consume('KeyR')) newGame();
+    if (input.consume('KeyM')) state = 'menu';
+    return;
+  }
+  if (state === 'levelup') {
+    updateLevelUpMenu();
+    return; // mundo congelado mientras se elige
+  }
+  // DevConsole: actualizar y manejar controles
+  devConsole.update(dt, input);
+  if (input.consume('KeyX')) devConsole.export();
+  if (input.consume('KeyV')) {
+    const cfg = prompt('Pega la configuración JSON exportada:');
+    if (cfg) devConsole.import(cfg);
+  }
+  if (input.consume('KeyR') && devConsole.visible) devConsole.reset();
+  // Aplicar parámetros del devConsole al juego
+  devConsole.applyToGame(player, combat, spawner, enemies);
+  // AbilitySystem: cambiar habilidad con 1-6, triggear con click
+  for (let i = 0; i < 6; i++) {
+    if (input.consume(`Digit${i + 1}`)) {
+      abilitySystem.selectAbility(i);
+    }
+  }
+  // Detectar click izquierdo para abilities
+  if (input.mouseClick && !input.mouseClickConsumed) {
+    input.mouseClickConsumed = true;
+    abilitySystem.activate(enemies, effects);
+  }
+  // Update cooldowns
+  abilitySystem.update(dt, input);
+  survivalTime += dt;
+  scenario.update(dt);
+  // El multiplicador del bioma afecta la velocidad del player cada frame
+  player.envSpeedMult = scenario.playerSpeedMult;
+  player.update(dt, input, scenario.bounds);
+  scenario.collide(player); // colisión con rocas (asteroides)
+  const view = getView(); // rect visible: spawn fuera de él, cull dentro
+  spawner.update(dt, enemies, player, scenario.world);
+  for (const e of enemies) {
+    e.update(dt, player, enemyShots);
+    // Daño por contacto: los i-frames del player regulan el ritmo
+    if (aabb(player, e) && player.takeDamage(e.damage)) effects.shake(7, 0.25);
+    // Healer: cura a enemigos aliados en rango
+    if (e.type === 'healer' && !e.isDead) {
+      const def = ENEMY_TYPES.healer;
+      const healRangeSq = def.healRange ** 2;
+      for (const ally of enemies) {
+        if (ally === e || ally.isDead) continue;
+        const dx = ally.cx - e.cx;
+        const dy = ally.cy - e.cy;
+        if (dx * dx + dy * dy <= healRangeSq) {
+          ally.hp = Math.min(ally.maxHp, ally.hp + def.healPower * dt);
+        }
+      }
+    }
+    // Boss Elite: dispara ráfaga cada 3s en 8 direcciones
+    if (e.type === 'boss_elite' && !e.isDead) {
+      e.burstCd = (e.burstCd || e.burstCooldown) - dt;
+      if (e.burstCd <= 0) {
+        const def = ENEMY_TYPES.boss_elite;
+        const bulletDef = { damage: 6, projectileSpeed: 3, pierce: false, color: '#ff006e' };
+        for (let i = 0; i < def.burstCount; i++) {
+          const a = (i / def.burstCount) * Math.PI * 2;
+          enemyShots.push(new Projectile(e.cx, e.cy, Math.cos(a), Math.sin(a), bulletDef));
+        }
+        e.burstCd = def.burstCooldown;
+        if (effects) effects.burst(e.cx, e.cy, '#ff006e', 16);
+      }
+    }
+  }
+  // Proyectiles del player: mueren al salir de la VISTA (no del mundo
+  // entero), para no arrastrar balas perdidas por todo el escenario.
+  combat.update(dt, enemies, projectiles, view, effects);
+  // Actualizar projectiles especiales (boomerang vuelve, grenade explota)
+  for (const p of projectiles) {
+    if (p.kind === 'boomerang' || p.kind === 'grenade') {
+      p.update(dt, view, player.cx, player.cy);
+    }
+  }
+  // Combo meter: sumar al impactar, resetear en inactividad
+  // (se actualiza al fin del loop cuando impactos se registran)
+  // Rocas bloquean proyectiles del jugador
+  removeWhere(projectiles, (p) => scenario.blocksProjectile(p));
+  // Granada explota en timer (no al salir de pantalla)
+  for (const p of projectiles.filter(pr => pr.kind === 'grenade' && pr.dead)) {
+    if (effects) combat.explode(p, enemies, effects);
+  }
+  // Proyectiles enemigos (drones) contra el player
+  for (const s of enemyShots) {
+    s.update(dt, view);
+    if (!s.dead && aabb(player, s)) {
+      if (player.takeDamage(s.damage)) effects.shake(7, 0.25);
+      s.dead = true;
+    }
+  }
+  // Los muertos sueltan su orbe y estallan ANTES de la limpieza in-place
+  for (const e of enemies) {
+    if (!e.isDead) continue;
+    effects.burst(e.cx, e.cy, e.color, e.elite ? 24 : 10);
+    if (e.type === 'boss' || e.type === 'boss_elite') {
+      // Botín de jefe: anillo de orbes + sacudida fuerte de recompensa
+      effects.shake(10, 0.4);
+      const orbCount = e.type === 'boss_elite' ? 12 : 8;
+      const xpPerOrb = e.type === 'boss_elite' ? 5 : 3;
+      for (let i = 0; i < orbCount; i++) {
+        const a = (i / orbCount) * Math.PI * 2;
+        xpSystem.spawnOrb(e.cx + Math.cos(a) * 30, e.cy + Math.sin(a) * 30, xpPerOrb);
+      }
+    } else if (e.elite) {
+      // Élite (brute, charger, etc): más XP que enemigos normales
+      for (let i = 0; i < 2; i++) {
+        const a = (i / 2) * Math.PI;
+        xpSystem.spawnOrb(e.cx + Math.cos(a) * 20, e.cy + Math.sin(a) * 20, Math.ceil(e.xpValue * 1.5));
+      }
+    } else {
+      xpSystem.spawnOrb(e.cx, e.cy, e.xpValue);
+    }
+    // Splitter: se parte en crías al morir (se añaden al vuelo; el
+    // for..of las visita pero las salta por !isDead).
+    if (e.splits && e.splitInto) {
+      for (let i = 0; i < e.splits; i++) {
+        const a = Math.random() * Math.PI * 2;
+        enemies.push(spawner.spawnAt(e.cx + Math.cos(a) * 16, e.cy + Math.sin(a) * 16, e.splitInto));
+      }
+    }
+  }
+  session.kills += removeWhere(enemies, (e) => e.isDead);
+  removeWhere(projectiles, (p) => p.dead);
+  removeWhere(enemyShots, (s) => s.dead);
+  xpSystem.update(dt);
+  effects.update(dt);
+  // ¿Subió de nivel? Abrir menú de mejora (uno por nivel encolado)
+  if (xpSystem.pendingLevels > 0) {
+    xpSystem.pendingLevels--;
+    choices = upgrades.rollChoices();
+    state = 'levelup';
+  }
+}
+function updateMenu() {
+  // Este función ya no se usa, el menú se maneja en main_menu state
+}
+function updateLevelUpMenu() {
+  // Teclado: 1, 2, 3
+  const keys = ['Digit1', 'Digit2', 'Digit3'];
+  for (let i = 0; i < choices.length; i++) {
+    if (input.consume(keys[i])) {
+      upgrades.apply(choices[i]);
+      choices = null;
+      state = 'playing';
+      return;
+    }
+  }
+  // Mouse: detectar click en cards de upgrade
+  if (input.mouseClick && !input.mouseClickConsumed) {
+    const cardW = 280;
+    const gap = 80;
+    const totalW = 3 * cardW + 2 * gap;
+    const startX = (VIEW_W - totalW) / 2;
+    const cardY = 215;
+    const cardH = 120;
+    for (let i = 0; i < choices.length; i++) {
+      const x = startX + i * (cardW + gap);
+      if (mouseX >= x && mouseX <= x + cardW && mouseY >= cardY && mouseY <= cardY + cardH) {
+        upgrades.apply(choices[i]);
+        choices = null;
+        state = 'playing';
+        input.mouseClickConsumed = true;
+        return;
+      }
+    }
+  }
+}
+function render() {
+  if (state === 'main_menu') {
+    renderer.clear('#0a0a12');
+    menuSystem.render(renderer, VIEW_W, VIEW_H);
+    return;
+  }
+  if (state === 'menu') {
+    renderMenu();
+    return;
+  }
+  // Fondo a pantalla completa (sin cámara), luego el MUNDO bajo la
+  // transformación de cámara. El screen shake se suma al offset de
+  // cámara, así sacude el mundo pero no el HUD ni el cielo.
+  renderer.clear(scenario.biome.sky || '#0a0a12');
+  const view = getView();
+  renderer.beginWorld(view.x - effects.offsetX, view.y - effects.offsetY);
+  scenario.renderWorld(renderer, elapsed, view);
+  xpSystem.render(renderer); // orbes debajo de todo lo vivo
+  for (const e of enemies) if (inView(e, view)) e.render(renderer);
+  for (const p of projectiles) p.render(renderer);
+  for (const s of enemyShots) s.render(renderer);
+  player.render(renderer);
+  combat.render(renderer); // cuchillas orbitales y barridos de melee
+  effects.render(renderer); // partículas y números de daño sobre el mundo
+  renderer.endWorld();
+  scenario.renderForeground(renderer); // velo de tormenta (pantalla)
+  renderHud();
+  devConsole.render(renderer, VIEW_W, VIEW_H);
+  if (state === 'levelup') renderLevelUpMenu();
+}
+function renderHud() {
+  // Barra de XP: franja fina arriba de todo (clásico del género)
+  const xpPct = xpSystem.xp / xpSystem.xpToNext;
+  renderer.rect(0, 0, VIEW_W, 4, '#1c2030');
+  renderer.rect(0, 0, VIEW_W * xpPct, 4, '#ffe44f');
+  // Combo meter: si hay combo, mostrar en grande en la esquina superior derecha
+  if (player.combo > 0) {
+    const comboMult = (1 + Math.min(1, player.combo * 0.05)).toFixed(2);
+    renderer.text(`COMBO x${comboMult}`, VIEW_W - 180, 30, '#ff00ff', 18);
+  }
+  // Barra de recarga del Dash (esquina superior derecha)
+  const dashPct = 1 - (player.dashCooldown / player.dashMaxCooldown);
+  const dashBarW = 120;
+  renderer.rect(VIEW_W - dashBarW - 10, 50, dashBarW, 8, '#1c2030');
+  renderer.rect(VIEW_W - dashBarW - 10, 50, dashBarW * dashPct, 8, dashPct >= 1 ? '#00ff88' : '#ff9f1c');
+  renderer.text(`DASH`, VIEW_W - dashBarW - 10, 65, dashPct >= 1 ? '#00ff88' : '#999', 10);
+  // Barra de habilidad (esquina superior derecha, debajo del dash)
+  abilitySystem.render(renderer, VIEW_W, VIEW_H);
+  // Barra de HP
+  const pct = player.hp / player.stats.hp;
+  renderer.rect(10, 10, 150, 14, '#1c2030');
+  renderer.rect(10, 10, 150 * pct, 14, pct > 0.3 ? '#39ff14' : '#ff4f30');
+  renderer.text(`HP ${Math.ceil(player.hp)}/${player.stats.hp}`, 14, 21, '#05050a', 11);
+  renderer.text(`Nv ${xpSystem.level}`, 170, 21, '#ffe44f', 12);
+  if (player.stats.shieldMax > 0) {
+    renderer.text(`Escudo ${player.shield}/${player.stats.shieldMax}`, 214, 21, '#7df9ff', 12);
+  }
+  // Tiempo de supervivencia (el "score" natural del género)
+  const mm = String(Math.floor(survivalTime / 60)).padStart(2, '0');
+  const ss = String(Math.floor(survivalTime % 60)).padStart(2, '0');
+  renderer.text(`${mm}:${ss}`, VIEW_W / 2 - 18, 24, '#7df9ff', 16);
+  renderer.text(`FPS: ${loop.fps.toFixed(0)}`, 10, 42, '#7df9ff');
+  renderer.text(`Enemigos: ${enemies.length}`, 10, 60, '#ff3864', 12);
+  renderer.text(`Kills: ${session.kills}`, 10, 78, '#39ff14', 12);
+  renderer.text(`Armas: ${combat.weapons.map((w) => w.name).join(', ')}`, 10, 96, '#9aa0b4', 12);
+  if (state !== 'menu') {
+    renderer.text(`Bioma: ${scenario.biome.name}`, 10, 114, '#7db4ff', 11);
+  }
+  if (player.isDead) {
+    renderer.text('GAME OVER', VIEW_W / 2 - 64, VIEW_H / 2, '#ff4f30', 24);
+    renderer.text(
+      `Sobreviviste ${mm}:${ss} · Nivel ${xpSystem.level} · ${session.kills} kills`,
+      VIEW_W / 2 - 130, VIEW_H / 2 + 26, '#9aa0b4', 14
+    );
+    renderer.text('R: reiniciar · M: menú', VIEW_W / 2 - 86, VIEW_H / 2 + 50, '#7df9ff', 12);
+  }
+}
+function renderMenu() {
+  try {
+    menuSystem.render(renderer, VIEW_W, VIEW_H);
+  } catch (e) {
+    renderer.text('ERROR EN MENU: ' + e.message, 100, 100, '#ff0000', 12);
+  }
+}
+function renderLevelUpMenu() {
+  // Velo oscuro: el mundo sigue visible pero claramente en pausa
+  renderer.rect(0, 0, VIEW_W, VIEW_H, 'rgba(5, 5, 10, 0.78)');
+  renderer.text('LEVEL UP', VIEW_W / 2 - 54, 150, '#ffe44f', 24);
+  renderer.text('Elige una mejora (1, 2 o 3)', VIEW_W / 2 - 100, 178, '#9aa0b4', 14);
+  const cardW = 210;
+  const cardH = 120;
+  const gap = 24;
+  const totalW = choices.length * cardW + (choices.length - 1) * gap;
+  const startX = (VIEW_W - totalW) / 2;
+  const y = 215;
+  for (let i = 0; i < choices.length; i++) {
+    const c = choices[i];
+    const x = startX + i * (cardW + gap);
+    renderer.rect(x, y, cardW, cardH, '#141a2e');
+    renderer.rect(x, y, cardW, 3, '#7df9ff'); // borde superior neón
+    renderer.text(`[${i + 1}]`, x + 14, y + 30, '#ffe44f', 16);
+    renderer.text(c.title, x + 14, y + 58, '#ffffff', 14);
+    c.lines.forEach((line, j) => {
+      renderer.text(line, x + 14, y + 82 + j * 16, '#9aa0b4', 12);
+    });
+  }
+}
+const loop = new GameLoop({ update, render });
+loop.start();
+// Handle de debug para la consola del navegador (solo desarrollo).
+// Getters: las referencias cambian en cada newGame().
+window.SM = {
+  session, loop, input, newGame, selectedBiome,
+  get player() { return player; },
+  get enemies() { return enemies; },
+  get projectiles() { return projectiles; },
+  get enemyShots() { return enemyShots; },
+  get spawner() { return spawner; },
+  get effects() { return effects; },
+  get combat() { return combat; },
+  get xpSystem() { return xpSystem; },
+  get upgrades() { return upgrades; },
+  get scenario() { return scenario; },
+  get state() { return state; },
+  get choices() { return choices; },
+  get devConsole() { return devConsole; },
+  get menuSystem() { return menuSystem; },
+  get abilitySystem() { return abilitySystem; },
+  get survivalTime() { return survivalTime; },
+};
+
+  </script>
+</body>
+</html>
