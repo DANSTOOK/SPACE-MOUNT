@@ -31,6 +31,9 @@ export class Player {
     this.hp = this.stats.hp;
 
     this.invulnTimer = 0;
+    // Multiplicador ambiental (bioma): baja gravedad, tormentas...
+    // Lo fija main.js cada frame desde el ScenarioSystem.
+    this.envSpeedMult = 1;
     // Última dirección de movimiento: el auto-ataque (Fase 4) la usará
     // como dirección de apuntado por defecto.
     this.facingX = 1;
@@ -54,14 +57,14 @@ export class Player {
       this.facingX = dx;
       this.facingY = dy;
 
-      const v = this.stats.speed * SPEED_SCALE;
+      const v = this.stats.speed * SPEED_SCALE * this.envSpeedMult;
       this.x += dx * v * dt;
       this.y += dy * v * dt;
     }
 
-    // Colisión con los límites del mapa: clamp, no rebote.
-    this.x = clamp(this.x, 0, bounds.w - this.w);
-    this.y = clamp(this.y, 0, bounds.h - this.h);
+    // Colisión con los límites del mapa (rectángulo {x,y,w,h}): clamp.
+    this.x = clamp(this.x, bounds.x, bounds.x + bounds.w - this.w);
+    this.y = clamp(this.y, bounds.y, bounds.y + bounds.h - this.h);
 
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
   }

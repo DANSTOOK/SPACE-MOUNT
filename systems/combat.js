@@ -25,8 +25,19 @@ export const WEAPONS = {
     pierce: true, // atraviesa enemigos: bueno contra filas
     color: '#ffa12d',
   },
-  // electric_chain (rebota entre enemigos) queda para una fase avanzada
+  electric_chain: {
+    name: 'Electric Chain',
+    damage: 10,
+    fireRate: 0.8,
+    projectileSpeed: 7,
+    pierce: false,
+    chain: 3, // rebota hasta 3 veces al enemigo vivo más cercano
+    color: '#e8ff4f',
+  },
 };
+
+const CHAIN_RANGE = 240;  // px máximos de un rebote
+const CHAIN_DECAY = 0.8;  // el daño decae 20% por rebote
 
 export class CombatSystem {
   constructor(player) {
@@ -98,13 +109,48 @@ export class CombatSystem {
       if (p.dead) continue;
 
       for (const e of enemies) {
-        if (e.isDead || !aabb(p, e)) continue;
+        if (e.isDead || p.hit.has(e) || !aabb(p, e)) continue;
         e.takeDamage(p.damage);
-        if (!p.pierce) {
-          p.dead = true;
-          break;
+        p.hit.add(e);
+
+        if (p.pierce) continue;
+
+        // Electric chain: en vez de morir, rebota hacia el siguiente
+        // enemigo vivo más cercano que aún no haya golpeado.
+        if (p.chainLeft > 0) {
+          const next = this.nearestChainTarget(p, enemies, e);
+          if (next) {
+            const dx = next.cx - p.cx;
+            const dy = next.cy - p.cy;
+            const len = Math.hypot(dx, dy) || 1;
+            p.dirX = dx / len;
+            p.dirY = dy / len;
+            p.chainLeft--;
+            p.damage = Math.max(1, Math.round(p.damage * CHAIN_DECAY));
+            break;
+          }
         }
+
+        p.dead = true;
+        break;
       }
     }
+  }
+
+  nearestChainTarget(p, enemies, from) {
+    const rangeSq = CHAIN_RANGE ** 2;
+    let best = null;
+    let bestSq = Infinity;
+    for (const e of enemies) {
+      if (e.isDead || p.hit.has(e)) continue;
+      const dx = e.cx - from.cx;
+      const dy = e.cy - from.cy;
+      const dSq = dx * dx + dy * dy;
+      if (dSq <= rangeSq && dSq < bestSq) {
+        bestSq = dSq;
+        best = e;
+      }
+    }
+    return best;
   }
 }

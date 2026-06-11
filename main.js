@@ -1,6 +1,6 @@
 // main.js: punto de entrada. Ensambla engine + entidades + sistemas,
-// maneja la máquina de estados (playing / levelup / muerte) y dibuja
-// el HUD. La lógica de gameplay vive en entities/ y systems/.
+// maneja la máquina de estados (menu → playing ⇄ levelup → muerte),
+// y dibuja el HUD. La lógica de gameplay vive en entities/ y systems/.
 
 import { Renderer, VIEW_W, VIEW_H } from './engine/renderer.js';
 import { GameLoop } from './engine/gameLoop.js';
@@ -10,41 +10,31 @@ import { SpawnSystem } from './systems/spawn.js';
 import { CombatSystem } from './systems/combat.js';
 import { XpSystem } from './systems/xpSystem.js';
 import { UpgradeSystem } from './systems/upgrades.js';
+import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js';
 import { aabb, removeWhere } from './utils/helpers.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
 const input = new Input();
 
-// Límites del mapa: por ahora el mundo es exactamente la pantalla.
-// Cuando existan escenarios/cámara, esto lo definirá el bioma.
-const bounds = { w: VIEW_W, h: VIEW_H };
-
-// Bioma activo (estructura de la spec). El sistema completo de
-// escenarios llegará después; por ahora spawn consume estos datos.
-const BIOME_MARS = {
-  name: 'Mars',
-  gravity: 1,
-  enemyMultiplier: 1.2,
-  specialEffect: 'dust_storm', // sin efecto todavía
-};
-
 const session = { kills: 0 };
 
 // Todo el estado de partida se recrea en newGame(): reiniciar con R
 // no recarga la página.
 let player, enemies, projectiles, enemyShots;
-let spawner, combat, xpSystem, upgrades;
-let state;    // 'playing' | 'levelup' (la muerte se deriva de player.isDead)
+let spawner, combat, xpSystem, upgrades, scenario;
+let state = 'menu';    // 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
 let survivalTime;
+let selectedBiome = 'mars'; // bioma seleccionado en el menú
 
 function newGame() {
-  player = new Player(VIEW_W / 2, VIEW_H / 2);
+  scenario = new ScenarioSystem(selectedBiome);
+  player = new Player(scenario.bounds.x + scenario.bounds.w / 2, scenario.bounds.y + scenario.bounds.h / 2);
   enemies = [];
   projectiles = [];
   enemyShots = [];
-  spawner = new SpawnSystem(BIOME_MARS);
+  spawner = new SpawnSystem(scenario.biome);
   combat = new CombatSystem(player);
   xpSystem = new XpSystem(player);
   upgrades = new UpgradeSystem(player, combat);
@@ -53,7 +43,10 @@ function newGame() {
   state = 'playing';
   choices = null;
 }
-newGame();
+
+// Inicializar al cargar (comienza en menú, pero newGame() no se ejecuta hasta que el usuario selecciona)
+// Para evitar errores en render() cuando scenario es undefined, inicializo con un dummy
+scenario = { renderBackground: () => {}, renderForeground: () => {}, biome: { name: 'Cargando...' } };
 
 // --- Fondo decorativo: cielo de Marte (de la Fase 1) ---
 const stars = Array.from({ length: 120 }, () => ({
@@ -69,8 +62,14 @@ let elapsed = 0;
 function update(dt) {
   elapsed += dt;
 
+  if (state === 'menu') {
+    updateMenu();
+    return;
+  }
+
   if (player.isDead) {
     if (input.consume('KeyR')) newGame();
+    if (input.consume('KeyM')) state = 'menu';
     return;
   }
 
@@ -80,9 +79,14 @@ function update(dt) {
   }
 
   survivalTime += dt;
+  scenario.update(dt);
 
-  player.update(dt, input, bounds);
-  spawner.update(dt, enemies, bounds);
+  // El multiplicador del bioma afecta la velocidad del player cada frame
+  player.envSpeedMult = scenario.playerSpeedMult;
+
+  player.update(dt, input, scenario.bounds);
+  scenario.collide(player); // colisión con rocas (asteroides)
+  spawner.update(dt, enemies, scenario.bounds, scenario.closed);
 
   for (const e of enemies) {
     e.update(dt, player, enemyShots);
@@ -90,11 +94,14 @@ function update(dt) {
     if (aabb(player, e)) player.takeDamage(e.damage);
   }
 
-  combat.update(dt, enemies, projectiles, bounds);
+  combat.update(dt, enemies, projectiles, scenario.bounds);
+
+  // Rocas bloquean proyectiles del jugador
+  removeWhere(projectiles, (p) => scenario.blocksProjectile(p));
 
   // Proyectiles enemigos (drones) contra el player
   for (const s of enemyShots) {
-    s.update(dt, bounds);
+    s.update(dt, scenario.bounds);
     if (!s.dead && aabb(player, s)) {
       player.takeDamage(s.damage);
       s.dead = true;
@@ -119,6 +126,17 @@ function update(dt) {
   }
 }
 
+function updateMenu() {
+  const biomeKeys = ['mars', 'luna', 'asteroids', 'station'];
+  for (let i = 0; i < 4; i++) {
+    if (input.consume(`Digit${i + 1}`)) {
+      selectedBiome = biomeKeys[i];
+      newGame();
+      return;
+    }
+  }
+}
+
 function updateLevelUpMenu() {
   const keys = ['Digit1', 'Digit2', 'Digit3'];
   for (let i = 0; i < choices.length; i++) {
@@ -132,21 +150,20 @@ function updateLevelUpMenu() {
 }
 
 function render() {
-  renderer.clear('#0a0a12');
-
-  for (const s of stars) {
-    const alpha = 0.4 + 0.6 * Math.abs(Math.sin(elapsed * s.speed + s.phase));
-    renderer.rect(s.x, s.y, s.size, s.size, `rgba(255,255,255,${alpha.toFixed(2)})`);
+  if (state === 'menu') {
+    renderMenu();
+    return;
   }
 
-  renderer.rect(0, VIEW_H - 60, VIEW_W, 60, '#3d1410');
-  renderer.rect(0, VIEW_H - 60, VIEW_W, 3, '#ff4f30');
+  scenario.renderBackground(renderer, elapsed, stars);
 
-  xpSystem.render(renderer); // orbes debajo de todo lo vivo
+  if (xpSystem) xpSystem.render(renderer); // orbes debajo de todo lo vivo
   for (const e of enemies) e.render(renderer);
   for (const p of projectiles) p.render(renderer);
   for (const s of enemyShots) s.render(renderer);
   player.render(renderer);
+
+  scenario.renderForeground(renderer);
 
   renderHud();
 
@@ -176,13 +193,37 @@ function renderHud() {
   renderer.text(`Kills: ${session.kills}`, 10, 78, '#39ff14', 12);
   renderer.text(`Armas: ${combat.weapons.map((w) => w.name).join(', ')}`, 10, 96, '#9aa0b4', 12);
 
+  if (state !== 'menu') {
+    renderer.text(`Bioma: ${scenario.biome.name}`, 10, 114, '#7db4ff', 11);
+  }
+
   if (player.isDead) {
     renderer.text('GAME OVER', VIEW_W / 2 - 64, VIEW_H / 2, '#ff4f30', 24);
     renderer.text(
       `Sobreviviste ${mm}:${ss} · Nivel ${xpSystem.level} · ${session.kills} kills`,
       VIEW_W / 2 - 130, VIEW_H / 2 + 26, '#9aa0b4', 14
     );
-    renderer.text('Pulsa R para reiniciar', VIEW_W / 2 - 78, VIEW_H / 2 + 50, '#7df9ff', 14);
+    renderer.text('R: reiniciar · M: menú', VIEW_W / 2 - 86, VIEW_H / 2 + 50, '#7df9ff', 12);
+  }
+}
+
+function renderMenu() {
+  try {
+    renderer.rect(0, 0, 960, 540, 'rgba(5, 5, 10, 0.88)');
+    renderer.text('SPACE MOUNT', 350, 80, '#39ff14', 28);
+    renderer.text('Elige tu bioma (1-4)', 350, 130, '#ffe44f', 18);
+
+    renderer.rect(20, 200, 920, 50, '#141a2e');
+    renderer.rect(20, 260, 920, 50, '#141a2e');
+    renderer.rect(20, 320, 920, 50, '#141a2e');
+    renderer.rect(20, 380, 920, 50, '#141a2e');
+
+    renderer.text('1 - Marte (spawn agresivo)', 40, 220, '#ffe44f', 16);
+    renderer.text('2 - Luna (baja gravedad)', 40, 280, '#ffe44f', 16);
+    renderer.text('3 - Asteroides (rocas)', 40, 340, '#ffe44f', 16);
+    renderer.text('4 - Estacion (arena cerrada)', 40, 400, '#ffe44f', 16);
+  } catch (e) {
+    renderer.text('ERROR EN MENU', 100, 100, '#ff0000', 16);
   }
 }
 
@@ -221,7 +262,7 @@ loop.start();
 // Handle de debug para la consola del navegador (solo desarrollo).
 // Getters: las referencias cambian en cada newGame().
 window.SM = {
-  session, loop, input, newGame,
+  session, loop, input, newGame, selectedBiome,
   get player() { return player; },
   get enemies() { return enemies; },
   get projectiles() { return projectiles; },
@@ -230,6 +271,7 @@ window.SM = {
   get combat() { return combat; },
   get xpSystem() { return xpSystem; },
   get upgrades() { return upgrades; },
+  get scenario() { return scenario; },
   get state() { return state; },
   get choices() { return choices; },
 };

@@ -19,17 +19,26 @@ export class Projectile {
     this.pierce = weapon.pierce;
     this.color = weapon.color;
     this.dead = false;
+    // Rebotes restantes (electric chain) y enemigos ya golpeados
+    // (para no rebotar en círculos sobre el mismo objetivo).
+    this.chainLeft = weapon.chain || 0;
+    this.hit = new Set();
   }
 
+  get cx() { return this.x + this.w / 2; }
+  get cy() { return this.y + this.h / 2; }
+
+  // bounds es un rectángulo {x, y, w, h}: en mapas cerrados los
+  // proyectiles mueren en los muros, no en el borde de la pantalla.
   update(dt, bounds) {
     this.x += this.dirX * this.speed * dt;
     this.y += this.dirY * this.speed * dt;
 
     if (
-      this.x < -OFFSCREEN_MARGIN ||
-      this.x > bounds.w + OFFSCREEN_MARGIN ||
-      this.y < -OFFSCREEN_MARGIN ||
-      this.y > bounds.h + OFFSCREEN_MARGIN
+      this.x < bounds.x - OFFSCREEN_MARGIN ||
+      this.x > bounds.x + bounds.w + OFFSCREEN_MARGIN ||
+      this.y < bounds.y - OFFSCREEN_MARGIN ||
+      this.y > bounds.y + bounds.h + OFFSCREEN_MARGIN
     ) {
       this.dead = true;
     }
