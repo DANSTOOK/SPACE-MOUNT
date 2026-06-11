@@ -421,5 +421,6 @@ window.SM = {
   get state() { return state; },
   get choices() { return choices; },
   get devConsole() { return devConsole; },
+  get menuSystem() { return menuSystem; },
   get survivalTime() { return survivalTime; },
 };
