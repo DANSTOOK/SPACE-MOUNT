@@ -51,14 +51,14 @@ export class SpawnSystem {
   }
 
   // Tabla de pesos según el tiempo: variedad creciente. Parásitos
-  // desde 20s, brutes (élite) 30s, drones 45s, charger 60s, splitter 75s.
+  // desde 45s, brutes (élite) 75s, drones 120s, charger 180s, splitter 240s.
   pickType() {
     const table = [['marciano', 1]];
-    if (this.elapsed >= 20) table.push(['parasito', 0.5]);
-    if (this.elapsed >= 30) table.push(['brute', 0.25]);
-    if (this.elapsed >= 45) table.push(['drone', 0.35]);
-    if (this.elapsed >= 60) table.push(['charger', 0.3]);
-    if (this.elapsed >= 75) table.push(['splitter', 0.3]);
+    if (this.elapsed >= 45) table.push(['parasito', 0.5]);
+    if (this.elapsed >= 75) table.push(['brute', 0.25]);
+    if (this.elapsed >= 120) table.push(['drone', 0.35]);
+    if (this.elapsed >= 180) table.push(['charger', 0.3]);
+    if (this.elapsed >= 240) table.push(['splitter', 0.3]);
 
     const total = table.reduce((sum, [, w]) => sum + w, 0);
     let roll = Math.random() * total;
