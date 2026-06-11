@@ -21,7 +21,6 @@ import { aabb, removeWhere } from './utils/helpers.js';
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
 const input = new Input();
-const menuSystem = new MenuSystem();
 
 const session = { kills: 0 };
 
@@ -49,6 +48,7 @@ input.endFrame = function() {
 let player, enemies, projectiles, enemyShots;
 let spawner, combat, xpSystem, upgrades, scenario, effects;
 let devConsole, menuSystem;
+menuSystem = new MenuSystem();
 let state = 'menu';    // 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
 let survivalTime;
