@@ -109,7 +109,7 @@ export const ENEMY_TYPES = {
     // Jefe con patrón: persigue, pero cada 3s hace un estallido de
     // proyectiles enemigos en 8 direcciones. Telegrafía visible.
     hp: 500,
-    speed: 0.4,
+    speed: 1.2,
     damage: 22,
     size: 56,
     color: '#ff006e', // rosa intenso jefe
