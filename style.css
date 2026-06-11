@@ -1,0 +1,28 @@
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #05050a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * El canvas tiene una resolución lógica fija (960x540).
+ * CSS lo escala para llenar la ventana manteniendo 16:9,
+ * así el código del juego nunca depende del tamaño de pantalla.
+ */
+canvas {
+  width: min(100vw, calc(100vh * (16 / 9)));
+  aspect-ratio: 16 / 9;
+  image-rendering: pixelated; /* estilo pixel art: sin suavizado al escalar */
+}
