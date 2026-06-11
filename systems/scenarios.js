@@ -1,79 +1,80 @@
-// ScenarioSystem: biomas (estructura de la spec) + sus efectos
-// especiales jugables. Cada bioma define paleta, multiplicador de
-// spawn y un specialEffect que este sistema implementa: tormentas,
-// baja gravedad, rocas a la deriva o mapa cerrado.
+// ScenarioSystem: biomas + sus efectos especiales jugables. Define el
+// MUNDO (mucho mayor que la pantalla: la cámara sigue al player) y su
+// estrellado, bordes, rocas y muros. Cada bioma tiene un specialEffect:
+// tormentas, baja gravedad, rocas a la deriva o arena cerrada.
 
-import { VIEW_W, VIEW_H } from '../engine/renderer.js';
+import { VIEW_W, VIEW_H } from '../engine/renderer.js?v=2';
 import { aabb } from '../utils/helpers.js';
+
+// Tamaño del mundo grande (varios pantallazos). La estación es cerrada
+// y más pequeña.
+const BIG_W = 2600;
+const BIG_H = 1800;
 
 export const BIOMES = {
   mars: {
     name: 'Marte',
-    gravity: 1,
     enemyMultiplier: 1.2,
     specialEffect: 'dust_storm',
     sky: '#0a0a12',
-    ground: '#3d1410',
-    groundEdge: '#ff4f30',
+    edge: '#ff4f30',
+    world: { w: BIG_W, h: BIG_H },
     playerSpeedMult: 1,
     lines: ['Spawn agresivo y tormentas', 'de polvo que te frenan'],
   },
   luna: {
     name: 'Luna',
-    gravity: 0.16,
     enemyMultiplier: 0.9,
     specialEffect: 'low_gravity',
     sky: '#0b0e14',
-    ground: '#3a3f4a',
-    groundEdge: '#aab4c8',
+    edge: '#aab4c8',
+    world: { w: BIG_W, h: BIG_H },
     playerSpeedMult: 1.25,
     lines: ['Baja gravedad: te mueves', '25% mas rapido'],
   },
   asteroids: {
     name: 'Asteroides',
-    gravity: 0.05,
     enemyMultiplier: 1.0,
     specialEffect: 'obstacles',
     sky: '#070a10',
-    ground: '#1c2030',
-    groundEdge: '#7df9ff',
+    edge: '#7df9ff',
+    world: { w: BIG_W, h: BIG_H },
     playerSpeedMult: 1,
     lines: ['Rocas a la deriva bloquean', 'tu paso y tus disparos'],
   },
   station: {
     name: 'Estacion espacial',
-    gravity: 1,
     enemyMultiplier: 1.1,
     specialEffect: 'closed_map',
     sky: '#0c1018',
-    ground: '#141a2e',
-    groundEdge: '#39ff14',
+    edge: '#39ff14',
+    world: { w: 1400, h: 1000 }, // arena cerrada, más chica
     playerSpeedMult: 1,
-    lines: ['Arena cerrada: los enemigos', 'aparecen dentro, contigo'],
+    lines: ['Arena cerrada y compacta:', 'sin escapatoria'],
   },
 };
 
 export const BIOME_KEYS = Object.keys(BIOMES);
 
-const STORM_CALM = 15;     // s de calma entre tormentas
-const STORM_DURATION = 5;  // s que dura la tormenta
-const STORM_SLOW = 0.8;    // multiplicador de velocidad del player en tormenta
-const ROCK_COUNT = 7;
-const SAFE_RADIUS = 180;   // las rocas nunca nacen sobre el spawn del player
+const STORM_CALM = 15;
+const STORM_DURATION = 5;
+const STORM_SLOW = 0.8;
+const STAR_DENSITY = 1 / 9000; // estrellas por px² de mundo
+const ROCK_DENSITY = 1 / 90000; // rocas por px² (bioma asteroides)
+const SAFE_RADIUS = 220;        // nada nace sobre el spawn del player (centro)
 
 export class ScenarioSystem {
   constructor(key) {
     this.key = key;
     this.biome = BIOMES[key];
-
-    // Mapa cerrado: el área jugable es un rectángulo interior con muros
-    this.bounds = this.biome.specialEffect === 'closed_map'
-      ? { x: 120, y: 60, w: VIEW_W - 240, h: VIEW_H - 120 }
-      : { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
+    this.world = { ...this.biome.world };
+    // El área jugable es todo el mundo (player y enemigos se mueven por él).
+    this.bounds = { x: 0, y: 0, w: this.world.w, h: this.world.h };
 
     this.storming = false;
     this.stormTimer = STORM_CALM;
 
+    this.stars = this.generateStars();
     this.rocks = [];
     if (this.biome.specialEffect === 'obstacles') this.generateRocks();
   }
@@ -86,18 +87,35 @@ export class ScenarioSystem {
     return (this.biome.playerSpeedMult || 1) * (this.storming ? STORM_SLOW : 1);
   }
 
+  // Estrellas en coordenadas de MUNDO (parallax-free, simples).
+  generateStars() {
+    const n = Math.floor(this.world.w * this.world.h * STAR_DENSITY);
+    const stars = [];
+    for (let i = 0; i < n; i++) {
+      stars.push({
+        x: Math.random() * this.world.w,
+        y: Math.random() * this.world.h,
+        size: Math.random() < 0.85 ? 1 : 2,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.5 + Math.random() * 1.5,
+      });
+    }
+    return stars;
+  }
+
   generateRocks() {
-    const cx = VIEW_W / 2;
-    const cy = VIEW_H / 2;
-    while (this.rocks.length < ROCK_COUNT) {
-      const s = 28 + Math.random() * 32;
+    const cx = this.world.w / 2;
+    const cy = this.world.h / 2;
+    const target = Math.floor(this.world.w * this.world.h * ROCK_DENSITY);
+    let guard = 0;
+    while (this.rocks.length < target && guard++ < target * 8) {
+      const s = 30 + Math.random() * 44;
       const rock = {
-        x: Math.random() * (VIEW_W - s),
-        y: Math.random() * (VIEW_H - s),
-        w: s,
-        h: s,
-        vx: (Math.random() * 2 - 1) * 22, // deriva lenta en px/s
-        vy: (Math.random() * 2 - 1) * 22,
+        x: Math.random() * (this.world.w - s),
+        y: Math.random() * (this.world.h - s),
+        w: s, h: s,
+        vx: (Math.random() * 2 - 1) * 18,
+        vy: (Math.random() * 2 - 1) * 18,
       };
       const dx = rock.x + s / 2 - cx;
       const dy = rock.y + s / 2 - cy;
@@ -114,14 +132,12 @@ export class ScenarioSystem {
       }
     }
 
-    // Rocas a la deriva: cruzan la pantalla y reaparecen del otro lado
+    // Rocas a la deriva: rebotan en los bordes del mundo.
     for (const r of this.rocks) {
       r.x += r.vx * dt;
       r.y += r.vy * dt;
-      if (r.x < -r.w) r.x = VIEW_W;
-      if (r.x > VIEW_W) r.x = -r.w;
-      if (r.y < -r.h) r.y = VIEW_H;
-      if (r.y > VIEW_H) r.y = -r.h;
+      if (r.x < 0 || r.x > this.world.w - r.w) r.vx *= -1;
+      if (r.y < 0 || r.y > this.world.h - r.h) r.vy *= -1;
     }
   }
 
@@ -146,39 +162,35 @@ export class ScenarioSystem {
     return false;
   }
 
-  renderBackground(r, elapsed, stars) {
+  // Dibuja el mundo BAJO la transformación de cámara (coords de mundo).
+  // view = rect visible {x,y,w,h} para culling.
+  renderWorld(r, elapsed, view) {
     const b = this.biome;
-    r.clear(b.sky);
+    const vx0 = view.x - 4, vy0 = view.y - 4;
+    const vx1 = view.x + view.w + 4, vy1 = view.y + view.h + 4;
 
-    // La tormenta oculta las estrellas
+    // Estrellas (solo las visibles)
     if (!this.storming) {
-      for (const s of stars) {
-        const alpha = 0.4 + 0.6 * Math.abs(Math.sin(elapsed * s.speed + s.phase));
-        r.rect(s.x, s.y, s.size, s.size, `rgba(255,255,255,${alpha.toFixed(2)})`);
+      for (const s of this.stars) {
+        if (s.x < vx0 || s.x > vx1 || s.y < vy0 || s.y > vy1) continue;
+        const a = 0.4 + 0.6 * Math.abs(Math.sin(elapsed * s.speed + s.phase));
+        r.rect(s.x, s.y, s.size, s.size, `rgba(255,255,255,${a.toFixed(2)})`);
       }
     }
 
-    r.rect(0, VIEW_H - 60, VIEW_W, 60, b.ground);
-    r.rect(0, VIEW_H - 60, VIEW_W, 3, b.groundEdge);
-
+    // Rocas visibles
     for (const rock of this.rocks) {
+      if (rock.x + rock.w < vx0 || rock.x > vx1 || rock.y + rock.h < vy0 || rock.y > vy1) continue;
       r.rect(rock.x, rock.y, rock.w, rock.h, '#2a3142');
-      r.rect(rock.x, rock.y, rock.w, 2, '#454f68'); // brillo superior
+      r.rect(rock.x, rock.y, rock.w, 2, '#454f68');
     }
 
-    if (this.closed) {
-      const { x, y, w, h } = this.bounds;
-      // Muros: todo lo que queda fuera del área jugable
-      r.rect(0, 0, VIEW_W, y, '#10141f');
-      r.rect(0, y + h, VIEW_W, VIEW_H - y - h, '#10141f');
-      r.rect(0, y, x, h, '#10141f');
-      r.rect(x + w, y, VIEW_W - x - w, h, '#10141f');
-      // Borde neón del perímetro
-      r.rect(x - 2, y - 2, w + 4, 2, b.groundEdge);
-      r.rect(x - 2, y + h, w + 4, 2, b.groundEdge);
-      r.rect(x - 2, y, 2, h, b.groundEdge);
-      r.rect(x + w, y, 2, h, b.groundEdge);
-    }
+    // Borde del mundo (neón): el jugador ve los límites del escenario.
+    const t = 4;
+    r.rect(0, 0, this.world.w, t, b.edge);
+    r.rect(0, this.world.h - t, this.world.w, t, b.edge);
+    r.rect(0, 0, t, this.world.h, b.edge);
+    r.rect(this.world.w - t, 0, t, this.world.h, b.edge);
   }
 
   renderForeground(r) {

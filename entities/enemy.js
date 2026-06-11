@@ -59,6 +59,39 @@ export const ENEMY_TYPES = {
     behavior: 'chase',
     elite: true,
   },
+  charger: {
+    // Embiste: se acerca, telegrafía y se lanza en línea recta muy
+    // rápido. Hay que esquivar la embestida.
+    hp: 40,
+    speed: 0.8,
+    damage: 16,
+    size: 24,
+    color: '#ff9f1c',
+    xp: 3,
+    behavior: 'charger',
+  },
+  splitter: {
+    // Al morir se parte en 2 splitlings rápidos: matarlo crea más.
+    hp: 50,
+    speed: 1.0,
+    damage: 12,
+    size: 26,
+    color: '#2ec4b6',
+    xp: 3,
+    behavior: 'chase',
+    splits: 2,
+    splitInto: 'splitling',
+  },
+  splitling: {
+    // Cría del splitter: diminuto, rápido, frágil. No se vuelve a partir.
+    hp: 8,
+    speed: 2.2,
+    damage: 6,
+    size: 12,
+    color: '#2ec4b6',
+    xp: 1,
+    behavior: 'chase',
+  },
 };
 
 // "Arma" del drone (mismo formato que las WEAPONS del player, así
@@ -72,6 +105,13 @@ const DRONE_SHOT = {
 const DRONE_PREFERRED_DIST = 180; // px que intenta mantener
 const DRONE_FIRE_RANGE = 320;
 const DRONE_COOLDOWN = 2; // segundos entre disparos
+
+// Charger: acercarse, telegrafiar (windup) y embestir (dash).
+const CHARGE_RANGE = 260;     // px a los que decide embestir
+const CHARGE_WIND = 0.5;      // s de telegrafía (quieto, parpadea)
+const CHARGE_DUR = 0.35;      // s de duración de la embestida
+const CHARGE_SPEED = 430;     // px/s durante la embestida (muy rápido)
+const CHARGE_COOLDOWN = 2.5;  // s entre embestidas
 
 const SPEED_SCALE = 60; // px/frame@60fps -> px/segundo
 
@@ -91,10 +131,18 @@ export class Enemy {
     this.xpValue = def.xp;
     this.behavior = def.behavior;
     this.elite = def.elite || false; // dibuja barra de vida si true
+    this.splits = def.splits || 0;       // nº de crías al morir
+    this.splitInto = def.splitInto || null;
     // Cooldown inicial aleatorio: drones que spawnean juntos no
     // disparan en sincronía perfecta.
     this.shootTimer = 1 + Math.random();
     this.hitFlash = 0; // segundos restantes de parpadeo blanco al ser golpeado
+    // Estado del charger (embestida)
+    this.dashTime = 0;
+    this.windT = 0;
+    this.dashX = 0;
+    this.dashY = 0;
+    this.chargeCd = 1 + Math.random() * 2;
   }
 
   get cx() { return this.x + this.w / 2; }
@@ -134,14 +182,46 @@ export class Enemy {
       return;
     }
 
-    // 'chase' (marciano, parásito): persecución directa
+    if (this.behavior === 'charger') {
+      if (this.dashTime > 0) {
+        // Embistiendo: dirección fija a alta velocidad
+        this.dashTime -= dt;
+        this.x += this.dashX * CHARGE_SPEED * dt;
+        this.y += this.dashY * CHARGE_SPEED * dt;
+      } else if (this.windT > 0) {
+        // Telegrafía: quieto un instante; al terminar fija el rumbo
+        this.windT -= dt;
+        if (this.windT <= 0) {
+          this.dashX = nx;
+          this.dashY = ny;
+          this.dashTime = CHARGE_DUR;
+        }
+      } else {
+        // Acercarse lento; al estar en rango y con el cooldown listo,
+        // empieza la telegrafía de embestida.
+        this.x += nx * this.speed * dt;
+        this.y += ny * this.speed * dt;
+        this.chargeCd -= dt;
+        if (dist < CHARGE_RANGE && this.chargeCd <= 0) {
+          this.windT = CHARGE_WIND;
+          this.chargeCd = CHARGE_COOLDOWN;
+        }
+      }
+      return;
+    }
+
+    // 'chase' (marciano, parásito, brute, boss, splitter): persecución
     this.x += nx * this.speed * dt;
     this.y += ny * this.speed * dt;
   }
 
   render(r) {
-    // Flash blanco al recibir impacto: feedback de "le di"
-    r.rect(this.x, this.y, this.w, this.h, this.hitFlash > 0 ? '#ffffff' : this.color);
+    // Color del cuerpo: blanco al recibir impacto; parpadeo de aviso
+    // mientras el charger telegrafía la embestida.
+    let color = this.color;
+    if (this.hitFlash > 0) color = '#ffffff';
+    else if (this.windT > 0 && Math.floor(this.windT * 16) % 2 === 0) color = '#fff2a8';
+    r.rect(this.x, this.y, this.w, this.h, color);
     // "Ojos" oscuros: distinguen al enemigo de un simple rectángulo
     r.rect(this.x + 4, this.y + 5, 3, 3, '#0a0a12');
     r.rect(this.x + this.w - 7, this.y + 5, 3, 3, '#0a0a12');

@@ -10,7 +10,7 @@ import { SpawnSystem } from './systems/spawn.js?v=2';
 import { CombatSystem } from './systems/combat.js?v=2';
 import { XpSystem } from './systems/xpSystem.js?v=2';
 import { UpgradeSystem } from './systems/upgrades.js?v=2';
-import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js';
+import { ScenarioSystem, BIOMES, BIOME_KEYS } from './systems/scenarios.js?v=2';
 import { Effects } from './systems/effects.js';
 import { aabb, removeWhere } from './utils/helpers.js';
 
@@ -46,20 +46,33 @@ function newGame() {
   choices = null;
 }
 
-// Inicializar al cargar (comienza en menú, pero newGame() no se ejecuta hasta que el usuario selecciona)
-// Para evitar errores en render() cuando scenario es undefined, inicializo con un dummy
-scenario = { renderBackground: () => {}, renderForeground: () => {}, biome: { name: 'Cargando...' } };
-
-// --- Fondo decorativo: cielo de Marte (de la Fase 1) ---
-const stars = Array.from({ length: 120 }, () => ({
-  x: Math.random() * VIEW_W,
-  y: Math.random() * (VIEW_H * 0.8),
-  size: Math.random() < 0.85 ? 1 : 2,
-  phase: Math.random() * Math.PI * 2,
-  speed: 0.5 + Math.random() * 1.5,
-}));
+// Dummy mínimo para el menú (antes del primer newGame): nunca se
+// renderiza (render() sale temprano en 'menu'), solo evita errores si
+// algo lee scenario.
+scenario = { biome: { name: 'Cargando...', sky: '#0a0a12' }, world: { w: VIEW_W, h: VIEW_H } };
 
 let elapsed = 0;
+
+// --- Cámara ------------------------------------------------------
+// La vista sigue al player y se clampa al mundo. Devuelve el rect
+// visible {x,y,w,h} en coordenadas de mundo (para culling y spawn).
+function getView() {
+  const wld = scenario.world;
+  let camX = player.cx - VIEW_W / 2;
+  let camY = player.cy - VIEW_H / 2;
+  camX = Math.max(0, Math.min(camX, Math.max(0, wld.w - VIEW_W)));
+  camY = Math.max(0, Math.min(camY, Math.max(0, wld.h - VIEW_H)));
+  return { x: camX, y: camY, w: VIEW_W, h: VIEW_H };
+}
+
+// ¿La caja de la entidad toca la vista (+margen)? Para no dibujar lo
+// que está fuera de cámara (rendimiento en mundo grande).
+function inView(e, view, m = 48) {
+  return (
+    e.x + e.w >= view.x - m && e.x <= view.x + view.w + m &&
+    e.y + e.h >= view.y - m && e.y <= view.y + view.h + m
+  );
+}
 
 // La función que ve el GameLoop: corre la lógica del frame y SIEMPRE
 // limpia los flancos de input al final, sin importar por qué rama de
@@ -96,7 +109,10 @@ function tick(dt) {
 
   player.update(dt, input, scenario.bounds);
   scenario.collide(player); // colisión con rocas (asteroides)
-  spawner.update(dt, enemies, scenario.bounds, scenario.closed);
+
+  const view = getView(); // rect visible: spawn fuera de él, cull dentro
+
+  spawner.update(dt, enemies, player, scenario.world);
 
   for (const e of enemies) {
     e.update(dt, player, enemyShots);
@@ -104,14 +120,16 @@ function tick(dt) {
     if (aabb(player, e) && player.takeDamage(e.damage)) effects.shake(7, 0.25);
   }
 
-  combat.update(dt, enemies, projectiles, scenario.bounds, effects);
+  // Proyectiles del player: mueren al salir de la VISTA (no del mundo
+  // entero), para no arrastrar balas perdidas por todo el escenario.
+  combat.update(dt, enemies, projectiles, view, effects);
 
   // Rocas bloquean proyectiles del jugador
   removeWhere(projectiles, (p) => scenario.blocksProjectile(p));
 
   // Proyectiles enemigos (drones) contra el player
   for (const s of enemyShots) {
-    s.update(dt, scenario.bounds);
+    s.update(dt, view);
     if (!s.dead && aabb(player, s)) {
       if (player.takeDamage(s.damage)) effects.shake(7, 0.25);
       s.dead = true;
@@ -132,6 +150,15 @@ function tick(dt) {
       }
     } else {
       xpSystem.spawnOrb(e.cx, e.cy, e.xpValue);
+    }
+
+    // Splitter: se parte en crías al morir (se añaden al vuelo; el
+    // for..of las visita pero las salta por !isDead).
+    if (e.splits && e.splitInto) {
+      for (let i = 0; i < e.splits; i++) {
+        const a = Math.random() * Math.PI * 2;
+        enemies.push(spawner.spawnAt(e.cx + Math.cos(a) * 16, e.cy + Math.sin(a) * 16, e.splitInto));
+      }
     }
   }
   session.kills += removeWhere(enemies, (e) => e.isDead);
@@ -178,21 +205,25 @@ function render() {
     return;
   }
 
-  scenario.renderBackground(renderer, elapsed, stars);
+  // Fondo a pantalla completa (sin cámara), luego el MUNDO bajo la
+  // transformación de cámara. El screen shake se suma al offset de
+  // cámara, así sacude el mundo pero no el HUD ni el cielo.
+  renderer.clear(scenario.biome.sky || '#0a0a12');
+  const view = getView();
+  renderer.beginWorld(view.x - effects.offsetX, view.y - effects.offsetY);
 
-  // El mundo (entidades + efectos) se sacude; fondo y HUD no, para que
-  // no aparezcan huecos en los bordes ni tiemble el texto.
-  renderer.beginShake(effects.offsetX, effects.offsetY);
-  if (xpSystem) xpSystem.render(renderer); // orbes debajo de todo lo vivo
-  for (const e of enemies) e.render(renderer);
+  scenario.renderWorld(renderer, elapsed, view);
+  xpSystem.render(renderer); // orbes debajo de todo lo vivo
+  for (const e of enemies) if (inView(e, view)) e.render(renderer);
   for (const p of projectiles) p.render(renderer);
   for (const s of enemyShots) s.render(renderer);
   player.render(renderer);
   combat.render(renderer); // cuchillas orbitales y barridos de melee
   effects.render(renderer); // partículas y números de daño sobre el mundo
-  renderer.endShake();
 
-  scenario.renderForeground(renderer);
+  renderer.endWorld();
+
+  scenario.renderForeground(renderer); // velo de tormenta (pantalla)
 
   renderHud();
 

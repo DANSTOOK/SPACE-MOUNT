@@ -40,15 +40,17 @@ export class Renderer {
     this.ctx.fillText(str, x, y);
   }
 
-  // Sacudida de cámara: translada el origen para los dibujos que
-  // queden entre beginShake() y endShake(). Pensado para el mundo
-  // (entidades), no para el fondo ni el HUD, así no aparecen huecos.
-  beginShake(dx, dy) {
+  // Cámara: translada el origen para que todo lo dibujado entre
+  // beginWorld() y endWorld() use coordenadas de MUNDO. (camX,camY) es
+  // la esquina superior-izquierda visible del mundo. Pensado para el
+  // mundo (fondo + entidades); el HUD se dibuja fuera, en coords de
+  // pantalla. El redondeo evita "temblor" de subpíxel al moverse.
+  beginWorld(camX, camY) {
     this.ctx.save();
-    this.ctx.translate(Math.round(dx), Math.round(dy));
+    this.ctx.translate(-Math.round(camX), -Math.round(camY));
   }
 
-  endShake() {
+  endWorld() {
     this.ctx.restore();
   }
 }

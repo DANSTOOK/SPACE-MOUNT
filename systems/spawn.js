@@ -1,21 +1,24 @@
-// SpawnSystem: decide cuándo y dónde nacen enemigos. No sabe de
-// colisiones ni combate; solo produce instancias de Enemy según el
-// ritmo del bioma activo.
+// SpawnSystem: decide cuándo y dónde nacen enemigos. Los enemigos
+// aparecen en un anillo justo FUERA de la pantalla alrededor del
+// player (estándar survivor): siempre entran desde el borde visible,
+// nunca encima de ti, sin importar por dónde te muevas en el mundo.
 
 import { Enemy } from '../entities/enemy.js?v=2';
 
-// Rampa de dificultad: el intervalo entre spawns baja con el tiempo
-// de partida. Con enemyMultiplier 1.2 (Marte), todo va un 20% más rápido.
-const START_INTERVAL = 2.0; // segundos entre spawns al inicio
-const MIN_INTERVAL = 0.5;   // ritmo máximo
-const RAMP_RATE = 0.025;    // cuánto baja el intervalo por segundo jugado
+// Rampa de dificultad: el intervalo entre spawns baja con el tiempo.
+const START_INTERVAL = 2.0;
+const MIN_INTERVAL = 0.4;
+const RAMP_RATE = 0.025;
 
-// Cap de enemigos normales en pantalla (rendimiento). Los jefes se
-// saltan el cap: son eventos, no relleno.
-const MAX_ENEMIES = 40;
+// Cap de enemigos normales (rendimiento). Los jefes lo ignoran.
+const MAX_ENEMIES = 50;
 
-// Oleadas de jefe: aparece uno cada BOSS_INTERVAL segundos de partida.
+// Oleadas de jefe cada BOSS_INTERVAL segundos.
 const BOSS_INTERVAL = 45;
+
+// Distancia de aparición: justo más allá de la media-diagonal del
+// viewport (~550px) para que nazcan fuera de cámara.
+const SPAWN_DIST = 560;
 
 export class SpawnSystem {
   constructor(biome) {
@@ -30,33 +33,32 @@ export class SpawnSystem {
     return base / this.biome.enemyMultiplier;
   }
 
-  // inside=true (mapas cerrados): los enemigos nacen pegados al muro
-  // por dentro, porque no hay "fuera" desde donde entrar caminando.
-  update(dt, enemies, bounds, inside = false) {
+  update(dt, enemies, player, world) {
     this.elapsed += dt;
     this.timer -= dt;
     this.bossTimer -= dt;
 
     if (this.timer <= 0 && enemies.length < MAX_ENEMIES) {
-      enemies.push(this.spawnOne(bounds, inside));
+      enemies.push(this.spawnOne(player, world));
       this.timer = this.interval;
     }
 
     // Oleada de jefe: ignora el cap (es un evento, no relleno).
     if (this.bossTimer <= 0) {
-      enemies.push(this.spawnOne(bounds, inside, 'boss'));
+      enemies.push(this.spawnOne(player, world, 'boss'));
       this.bossTimer = BOSS_INTERVAL;
     }
   }
 
-  // Tabla de pesos según el tiempo de partida: la dificultad no es
-  // solo cantidad, también variedad. Parásitos desde 20s, drones desde
-  // 45s, brutes (élite) desde 30s.
+  // Tabla de pesos según el tiempo: variedad creciente. Parásitos
+  // desde 20s, brutes (élite) 30s, drones 45s, charger 60s, splitter 75s.
   pickType() {
     const table = [['marciano', 1]];
     if (this.elapsed >= 20) table.push(['parasito', 0.5]);
     if (this.elapsed >= 30) table.push(['brute', 0.25]);
     if (this.elapsed >= 45) table.push(['drone', 0.35]);
+    if (this.elapsed >= 60) table.push(['charger', 0.3]);
+    if (this.elapsed >= 75) table.push(['splitter', 0.3]);
 
     const total = table.reduce((sum, [, w]) => sum + w, 0);
     let roll = Math.random() * total;
@@ -67,35 +69,22 @@ export class SpawnSystem {
     return 'marciano';
   }
 
-  // Posición aleatoria en un borde aleatorio del rectángulo jugable:
-  // fuera (entra caminando) o justo dentro si el mapa es cerrado.
-  // Nunca aparece encima del jugador.
-  spawnOne(bounds, inside = false, type = null) {
-    const size = 20;
-    const off = inside ? 2 : size + 4; // separación respecto al borde
-    const sign = inside ? 1 : -1;
-    const edge = Math.floor(Math.random() * 4); // 0=arriba 1=derecha 2=abajo 3=izquierda
-    let x, y;
-
-    switch (edge) {
-      case 0:
-        x = bounds.x + Math.random() * (bounds.w - size);
-        y = bounds.y + sign * off;
-        break;
-      case 1:
-        x = bounds.x + bounds.w - (inside ? off + size : -off);
-        y = bounds.y + Math.random() * (bounds.h - size);
-        break;
-      case 2:
-        x = bounds.x + Math.random() * (bounds.w - size);
-        y = bounds.y + bounds.h - (inside ? off + size : -off);
-        break;
-      default:
-        x = bounds.x + sign * off;
-        y = bounds.y + Math.random() * (bounds.h - size);
-        break;
-    }
-
+  // Anillo alrededor del player, justo fuera de cámara, clampeado al
+  // mundo para que no nazca fuera de los límites del escenario.
+  spawnOne(player, world, type = null) {
+    const size = 24;
+    const ang = Math.random() * Math.PI * 2;
+    const dist = SPAWN_DIST + Math.random() * 140;
+    let x = player.cx + Math.cos(ang) * dist;
+    let y = player.cy + Math.sin(ang) * dist;
+    x = Math.max(0, Math.min(x, world.w - size));
+    y = Math.max(0, Math.min(y, world.h - size));
     return new Enemy(x, y, type || this.pickType());
+  }
+
+  // Crea un enemigo en una posición concreta (lo usa main para las
+  // crías del splitter al morir).
+  spawnAt(x, y, type) {
+    return new Enemy(x, y, type);
   }
 }
