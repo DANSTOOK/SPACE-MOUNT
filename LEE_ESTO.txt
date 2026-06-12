@@ -1,0 +1,40 @@
+╔═════════════════════════════════════════════════════════════════╗
+║                                                                 ║
+║             🎮 SPACE MOUNT - ¡A JUGAR! 🚀                      ║
+║                                                                 ║
+╚═════════════════════════════════════════════════════════════════╝
+
+
+📌 PARA JUGAR:
+
+   Haz DOBLE-CLIC en:  JUEGO.bat
+
+   ¡Eso es todo! El juego se abre automáticamente.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+🎮 CONTROLES:
+
+   [1-4]        Seleccionar nivel
+   [WASD]       Movimiento
+   [ESPACIO]    Dash (esquivar)
+   [CLICK]      Habilidad especial
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+✨ CARACTERÍSTICAS:
+
+   ✓ Roguelike Survivor
+   ✓ 4 biomas únicos
+   ✓ Hazards ambientales
+   ✓ Sistema de upgrades
+   ✓ Jefes épicos
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+¡QUE DISFRUTES! 🎮🚀
