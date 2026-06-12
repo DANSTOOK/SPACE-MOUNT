@@ -8,11 +8,11 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder --publish never"
   },
   "devDependencies": {
-    "electron": "^latest",
-    "electron-builder": "^latest"
+    "electron": "^31.0.0",
+    "electron-builder": "^24.6.4"
   },
   "build": {
     "appId": "com.danstook.spacemount",
@@ -24,17 +24,8 @@
     ],
     "win": {
       "target": [
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "icon.png"
-    },
-    "portable": {
-      "artifactName": "${productName}.exe"
+        "portable"
+      ]
     }
   }
 }

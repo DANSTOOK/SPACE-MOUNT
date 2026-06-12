@@ -17,10 +17,11 @@ function createWindow() {
 
   // Cargar el archivo standalone.html
   const startUrl = `file://${path.join(__dirname, 'standalone.html')}`;
+  console.log('Loading:', startUrl);
   mainWindow.loadURL(startUrl);
 
-  // Abrir DevTools si está en modo desarrollo (opcional)
-  // mainWindow.webContents.openDevTools();
+  // Abrir DevTools para debugging
+  mainWindow.webContents.openDevTools();
 
   mainWindow.on('closed', () => {
     mainWindow = null;
