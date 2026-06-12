@@ -1,0 +1,40 @@
+{
+  "name": "space-mount",
+  "version": "1.0.0",
+  "description": "Space Mount - Roguelike Survivor en el Espacio",
+  "main": "electron-main.js",
+  "homepage": "./",
+  "author": "DANSTOOK",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^latest",
+    "electron-builder": "^latest"
+  },
+  "build": {
+    "appId": "com.danstook.spacemount",
+    "productName": "Space Mount",
+    "files": [
+      "electron-main.js",
+      "standalone.html",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.png"
+    },
+    "portable": {
+      "artifactName": "${productName}.exe"
+    }
+  }
+}
