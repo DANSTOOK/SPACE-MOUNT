@@ -48,6 +48,15 @@ const HAZARD_TYPES = {
     damage: 1,       // hp/s dentro
     color: '#000000',
   },
+  // Fase 2 cont.
+  energy_barrier: {
+    name: 'barrera',
+    cooldown: 40,
+    duration: 30,
+    width: 200,
+    height: 100,
+    color: '#00ff00',
+  },
   // Fase 3
   space_distortion: {
     name: 'distorsion',
@@ -56,6 +65,24 @@ const HAZARD_TYPES = {
     radius: 220,
     timeMult: 0.5,   // 0.5x velocidad
     color: '#ff00ff',
+  },
+  wormhole_portal: {
+    name: 'portal',
+    cooldown: 80,
+    duration: 25,
+    radius: 60,
+    color: '#6600ff',
+    portalPairId: null,  // se asigna al crear
+  },
+  nuclear_residue: {
+    name: 'residuo',
+    cooldown: 50,
+    duration: 25,
+    startRadius: 20,
+    maxRadius: 250,
+    expandRate: 100,  // px/s
+    damage: 3,
+    color: '#ffff00',
   },
 };
 
@@ -89,6 +116,15 @@ export class Hazard {
 
   update(dt) {
     this.remainingTime -= dt;
+
+    // Nuclear residue expande con el tiempo
+    if (this.type === 'nuclear_residue') {
+      const elapsed = this.maxTime - this.remainingTime;
+      this.currentRadius = Math.min(
+        this.def.maxRadius,
+        this.def.startRadius + elapsed * this.def.expandRate
+      );
+    }
   }
 
   // Aplica efecto a entidad (jugador o enemigo)
@@ -126,6 +162,15 @@ export class Hazard {
 
     if (this.type === 'space_distortion' && dist < this.def.radius) {
       return { timeMult: this.def.timeMult };
+    }
+
+    if (this.type === 'wormhole_portal' && dist < this.def.radius) {
+      // Los portales transportan (No efecto de movimiento aquí, se maneja en main)
+      return { inPortal: true };
+    }
+
+    if (this.type === 'nuclear_residue' && dist < this.currentRadius) {
+      return { damage: this.def.damage * dt };
     }
 
     return {};
@@ -221,6 +266,49 @@ export class Hazard {
         `rgba(255, 0, 255, ${0.1 * alpha})`
       );
     }
+
+    if (this.type === 'energy_barrier') {
+      // Barrera rectangular
+      r.rect(
+        this.cx - this.def.width / 2, this.cy - this.def.height / 2,
+        this.def.width, this.def.height,
+        `rgba(0, 255, 0, ${0.3 * alpha})`
+      );
+      // Borde pulsante
+      const pulse = Math.sin(Date.now() / 200) * 0.5 + 0.5;
+      for (let i = 0; i < 4; i++) {
+        const x = this.cx - this.def.width / 2 + (i % 2) * this.def.width;
+        const y = this.cy - this.def.height / 2 + Math.floor(i / 2) * this.def.height;
+        r.rect(x, y, 3, 3, `rgba(0, 255, 0, ${alpha * (0.5 + pulse * 0.5)})`);
+      }
+    }
+
+    if (this.type === 'wormhole_portal') {
+      // Portal en espiral
+      const angle = Date.now() / 1000;
+      for (let i = 0; i < 3; i++) {
+        const a = angle + (i * Math.PI / 3);
+        const x = this.cx + Math.cos(a) * 30;
+        const y = this.cy + Math.sin(a) * 30;
+        r.rect(x - 3, y - 3, 6, 6, `rgba(102, 0, 255, ${alpha * (0.5 + i * 0.2)})`);
+      }
+    }
+
+    if (this.type === 'nuclear_residue') {
+      // Onda expandiéndose
+      const r1 = this.currentRadius || this.def.startRadius;
+      r.rect(
+        this.cx - r1, this.cy - r1,
+        r1 * 2, r1 * 2,
+        `rgba(255, 255, 0, ${0.15 * alpha})`
+      );
+      // Borde de la onda
+      const w = 3;
+      r.rect(this.cx - r1 - w, this.cy - r1, r1 * 2 + w * 2, w, `rgba(255, 255, 0, ${alpha})`);
+      r.rect(this.cx - r1 - w, this.cy + r1, r1 * 2 + w * 2, w, `rgba(255, 255, 0, ${alpha})`);
+      r.rect(this.cx - r1, this.cy - r1 - w, w, r1 * 2, `rgba(255, 255, 0, ${alpha})`);
+      r.rect(this.cx + r1, this.cy - r1 - w, w, r1 * 2, `rgba(255, 255, 0, ${alpha})`);
+    }
   }
 }
 
@@ -243,10 +331,10 @@ export class HazardSystem {
       available.push('falling_meteor', 'radiation_zone', 'solar_wind');
     }
     if (phase2) {
-      available.push('gravity_field', 'black_hole');
+      available.push('gravity_field', 'black_hole', 'energy_barrier');
     }
     if (phase3) {
-      available.push('space_distortion');
+      available.push('space_distortion', 'wormhole_portal', 'nuclear_residue');
     }
 
     return available;
