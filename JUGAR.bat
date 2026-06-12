@@ -1,17 +1,19 @@
 @echo off
 REM ============================================================
 REM  SPACE MOUNT - Lanzador de un clic
-REM  Abre el juego directamente sin necesidad de servidor
+REM  Abre el juego con Electron (ventana nativa)
 REM ============================================================
 
 cd /d "%~dp0"
 
-REM Obtener la ruta completa al archivo
-set GAME_FILE=%~dp0standalone.html
-
-REM Abrir el archivo en el navegador predeterminado
-start "" "%GAME_FILE%"
-
-echo Juego abierto en tu navegador...
-echo Esperando 5 segundos...
-timeout /t 5 /nobreak
+REM Verificar si npm existe
+where npm >nul 2>nul
+if %errorlevel% equ 0 (
+    echo Iniciando Space Mount con Electron...
+    call npm start
+) else (
+    echo Error: Node.js no está instalado.
+    echo Descargue Node.js desde: https://nodejs.org/
+    echo Luego instale dependencias con: npm install
+    pause
+)

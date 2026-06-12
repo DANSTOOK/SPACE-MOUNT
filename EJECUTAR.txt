@@ -1,0 +1,59 @@
+═══════════════════════════════════════════════════════════════
+  🚀 SPACE MOUNT - Cómo Ejecutar el Juego
+═══════════════════════════════════════════════════════════════
+
+🎮 FORMA MÁS SIMPLE (Recomendado):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Haz doble-clic en: JUGAR.bat
+
+El juego se abrirá automáticamente en una ventana de Electron.
+
+
+⚙️  REQUISITOS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Node.js instalado (descarga desde: https://nodejs.org/)
+  - Versión recomendada: LTS (v20 o superior)
+
+✓ Primera ejecución:
+  - Se instalarán automáticamente las dependencias de Electron
+  - Tardará 2-3 minutos la primera vez
+
+
+🎮 ALTERNATIVA (si JUGAR.bat no funciona):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Abre Terminal/PowerShell en esta carpeta
+2. Ejecuta: npm start
+3. Espera a que se abra la ventana de Electron
+
+
+🎯 CONTROLES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[1-4]        Seleccionar nivel/menú
+[WASD]       Movimiento
+[ESPACIO]    Dash (esquivar rápido)
+[CLICK]      Habilidad especial
+[MOUSE]      Seleccionar upgrades
+
+
+🔧 PROBLEMAS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ "npm: command not found"
+   → Instala Node.js desde: https://nodejs.org/
+   → Reinicia la Terminal después de instalar
+
+❌ JUGAR.bat no abre nada
+   → Abre Terminal y ejecuta: npm start
+
+❌ Ventana en blanco/negra
+   → Cierra y vuelve a intentar
+   → Verifica que Electron se instaló correctamente
+
+
+═══════════════════════════════════════════════════════════════
+¡A JUGAR! 🎮
+═══════════════════════════════════════════════════════════════
