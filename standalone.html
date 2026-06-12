@@ -2272,6 +2272,7 @@ class AbilitySystem {
 ;
 ;
 ;
+;
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
 const input = new Input();
@@ -2297,7 +2298,7 @@ input.endFrame = function() {
 // no recarga la página.
 let player, enemies, projectiles, enemyShots;
 let spawner, combat, xpSystem, upgrades, scenario, effects;
-let devConsole, menuSystem, abilitySystem;
+let devConsole, menuSystem, abilitySystem, hazardSystem;
 menuSystem = new MenuSystem();
 let state = 'main_menu';    // 'main_menu' | 'menu' | 'playing' | 'levelup'
 let choices;  // las 3 mejoras ofrecidas durante 'levelup'
@@ -2317,6 +2318,7 @@ function newGame() {
   devConsole = new DevConsole();
   abilitySystem = new AbilitySystem(player);
   abilitySystem.selectAbility(0); // habilidad inicial: Pulso de Radiación
+  hazardSystem = new HazardSystem();
   session.kills = 0;
   survivalTime = 0;
   state = 'playing';
@@ -2406,14 +2408,47 @@ function tick(dt) {
   abilitySystem.update(dt, input);
   survivalTime += dt;
   scenario.update(dt);
+  hazardSystem.update(dt, scenario.world, survivalTime);
   // El multiplicador del bioma afecta la velocidad del player cada frame
   player.envSpeedMult = scenario.playerSpeedMult;
   player.update(dt, input, scenario.bounds);
   scenario.collide(player); // colisión con rocas (asteroides)
+  // Aplicar efectos de hazards al player
+  for (const hazard of hazardSystem.hazards) {
+    const effect = hazard.applyEffect(player, dt);
+    if (effect.damage) {
+      if (player.takeDamage(effect.damage)) effects.shake(3, 0.15);
+    }
+    if (effect.pushX || effect.pushY) {
+      player.x += effect.pushX;
+      player.y += effect.pushY;
+    }
+    if (effect.speedMult) {
+      player.envSpeedMult *= effect.speedMult;
+    }
+  }
   const view = getView(); // rect visible: spawn fuera de él, cull dentro
   spawner.update(dt, enemies, player, scenario.world);
   for (const e of enemies) {
     e.update(dt, player, enemyShots);
+    // Aplicar efectos de hazards a enemigos
+    for (const hazard of hazardSystem.hazards) {
+      // Meteoritos matan instantáneamente
+      if (hazard.hitsEntity(e)) {
+        e.hp = 0;
+        effects.burst(e.cx, e.cy, '#ffaa00', 16);
+        continue;
+      }
+      const effect = hazard.applyEffect(e, dt);
+      if (effect.damage) e.takeDamage(effect.damage);
+      if (effect.pushX || effect.pushY) {
+        e.x += effect.pushX;
+        e.y += effect.pushY;
+      }
+      if (effect.speedMult && effect.speedMult < 1) {
+        e.speed *= effect.speedMult;  // ralentizar
+      }
+    }
     // Daño por contacto: los i-frames del player regulan el ritmo
     if (aabb(player, e) && player.takeDamage(e.damage)) effects.shake(7, 0.25);
     // Healer: cura a enemigos aliados en rango
@@ -2563,6 +2598,7 @@ function render() {
   const view = getView();
   renderer.beginWorld(view.x - effects.offsetX, view.y - effects.offsetY);
   scenario.renderWorld(renderer, elapsed, view);
+  hazardSystem.render(renderer); // hazards ambientales
   xpSystem.render(renderer); // orbes debajo de todo lo vivo
   for (const e of enemies) if (inView(e, view)) e.render(renderer);
   for (const p of projectiles) p.render(renderer);
@@ -2674,6 +2710,7 @@ window.SM = {
   get devConsole() { return devConsole; },
   get menuSystem() { return menuSystem; },
   get abilitySystem() { return abilitySystem; },
+  get hazardSystem() { return hazardSystem; },
   get survivalTime() { return survivalTime; },
 };
 
