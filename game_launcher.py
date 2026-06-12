@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Space Mount Game Launcher
-Abre un servidor HTTP local y carga el juego automáticamente en el navegador
+Abre el juego en una ventana/tab limpia
 """
 
 import os
@@ -11,70 +11,63 @@ import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 import threading
+import socket
 
-class GameHTTPHandler(SimpleHTTPRequestHandler):
+class GameHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        # Servir standalone.html en cualquier ruta
+        if self.path == '/' or self.path == '':
+            self.path = '/standalone.html'
+        return super().do_GET()
+
     def end_headers(self):
-        # Evitar caching para que siempre cargue versión nueva
-        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
         super().end_headers()
 
     def log_message(self, format, *args):
-        # Suprime logs verbosos
         pass
 
-def start_server(port=8778):
-    """Inicia servidor HTTP en el puerto especificado"""
-    handler = GameHTTPHandler
-    server = HTTPServer(('127.0.0.1', port), handler)
-    print(f"🎮 Servidor iniciado en http://localhost:{port}")
-
-    # Ejecutar servidor en thread separado
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-
-    return server
+def find_free_port():
+    """Encontrar un puerto disponible"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
 
 def main():
-    # Cambiar a la carpeta del script
     script_dir = Path(__file__).parent.absolute()
     os.chdir(script_dir)
 
-    # Verificar que standalone.html existe
     if not (script_dir / 'standalone.html').exists():
-        print("❌ Error: No se encontró standalone.html")
-        print(f"   Ubicación esperada: {script_dir / 'standalone.html'}")
+        print("❌ Error: standalone.html no encontrado")
         input("Presiona Enter para salir...")
         sys.exit(1)
 
-    port = 8778
+    port = find_free_port()
 
     try:
         # Iniciar servidor
-        server = start_server(port)
+        server = HTTPServer(('127.0.0.1', port), GameHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
 
-        # Esperar un moment para que el servidor se inicialice
-        time.sleep(1)
+        time.sleep(0.5)
 
-        # Abrir el navegador
+        # Abrir navegador
+        url = f'http://localhost:{port}'
         print(f"🎮 Abriendo Space Mount...")
-        webbrowser.open(f'http://localhost:{port}')
+        webbrowser.open(url)
 
-        print("\n═══════════════════════════════════════════")
-        print("🎮 Space Mount está corriendo")
-        print("═══════════════════════════════════════════")
-        print(f"URL: http://localhost:{port}")
-        print("\nCierra esta ventana para detener el juego")
-        print("═══════════════════════════════════════════\n")
+        print(f"\n✅ Juego iniciado en {url}")
+        print("Cierra esta ventana para detener\n")
 
-        # Mantener el servidor activo
         while True:
             time.sleep(1)
 
     except KeyboardInterrupt:
-        print("\n\n👋 Juego cerrado")
+        print("\n👋 Juego cerrado")
         sys.exit(0)
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"❌ Error: {e}")
         input("Presiona Enter para salir...")
         sys.exit(1)
 
